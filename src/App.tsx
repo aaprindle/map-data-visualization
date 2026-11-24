@@ -63,12 +63,13 @@ export function App() {
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null);
 
+    const base = import.meta.env.BASE_URL;
     Promise.all([
-      safeJson('/data/napa_fires.geojson'),
-      safeJson('/data/north_bay_counties.geojson'),
-      safeJson('/data/napa_osm_pois.geojson'),
-      safeJson('/data/napa_osm_power.geojson'),
-      safeJson('/data/napa_osm_roads.geojson')
+      safeJson(`${base}data/napa_fires.geojson`),
+      safeJson(`${base}data/north_bay_counties.geojson`),
+      safeJson(`${base}data/napa_osm_pois.geojson`),
+      safeJson(`${base}data/napa_osm_power.geojson`),
+      safeJson(`${base}data/napa_osm_roads.geojson`)
     ]).then(([fires, counties, pois, power, roads]) => {
       if (fires) {
         setFiresData(fires);
