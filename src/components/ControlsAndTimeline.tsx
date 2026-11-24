@@ -1,10 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Flame,
   Search,
   Layers,
   Eye,
-  Compass,
   Play,
   Pause,
   SkipBack,
@@ -14,30 +13,49 @@ import {
   X,
   Filter,
   Award,
-  Scale
+  Scale,
+  Mountain,
+  Wind,
+  Wine,
+  Building2,
+  Zap,
+  Route,
+  Orbit,
+  PanelLeftClose,
+  PanelLeftOpen,
+  SlidersHorizontal
 } from 'lucide-react';
-import type { BasemapStyle, FireFeature, FireGeoJSON, ViewMode } from '../types/fire';
+import type {
+  BasemapStyle,
+  FireFeature,
+  FireGeoJSON,
+  LayerToggles,
+  ViewMode
+} from '../types/fire';
 import { LANDMARK_DOSSIERS, type LandmarkDossier } from '../data/landmarkFires';
 
 interface HeaderBarProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   searchResults: Array<{
-    type: 'fire' | 'policy' | 'landmark';
+    type: 'fire' | 'policy' | 'landmark' | 'osm';
     title: string;
     subtitle: string;
     acres?: number;
     year?: number;
     fire?: FireFeature;
     dossier?: LandmarkDossier;
+    coords?: [number, number];
   }>;
   onSelectSearchResult: (item: any) => void;
   viewMode: ViewMode;
   onViewModeChange: (m: ViewMode) => void;
   basemap: BasemapStyle;
   onBasemapChange: (b: BasemapStyle) => void;
-  showLandmarks: boolean;
-  onToggleLandmarks: () => void;
+  layers: LayerToggles;
+  onToggleLayer: (key: keyof LayerToggles) => void;
+  isOrbiting3D: boolean;
+  onToggleOrbit3D: () => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -49,36 +67,59 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onViewModeChange,
   basemap,
   onBasemapChange,
-  showLandmarks,
-  onToggleLandmarks
+  layers,
+  onToggleLayer,
+  isOrbiting3D,
+  onToggleOrbit3D
 }) => {
   const [focused, setFocused] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const activeOsmCount = [
+    layers.osmWineries,
+    layers.osmEmergency,
+    layers.osmPowerLines,
+    layers.osmCorridors
+  ].filter(Boolean).length;
 
   return (
     <header className="top-command-bar" id="top-command-header">
       <div className="brand-cluster">
         <div className="brand-emblem" aria-hidden="true">
-          <Flame size={21} />
+          <Flame size={19} />
         </div>
         <div className="brand-titles">
           <h1>Napa Valley Wildfire Atlas</h1>
           <div className="brand-subtitle">
-            <span>60-Year Spatiotemporal History (1964–2025)</span>
-            <span>•</span>
-            <span className="live-badge">CAL FIRE FRAP + CPUC ARCHIVE</span>
+            <span>1964–2025</span>
+            <span className="dot-sep">•</span>
+            <span className="live-badge">3D TERRAIN + CAL FIRE + OSM</span>
           </div>
         </div>
       </div>
 
       <div className="header-controls">
-        {/* Universal Search Box */}
+        {/* Command Search */}
         <div className="search-box-wrapper">
           <Search size={14} className="search-icon" />
           <input
+            ref={inputRef}
             id="universal-fire-search"
             type="text"
             className="search-input"
-            placeholder="Search fire, year, cause (PG&E, arson), SB 901, AVA..."
+            placeholder="Search fire, year, winery, SB 901... (⌘K)"
             value={searchQuery}
             onFocus={() => setFocused(true)}
             onBlur={() => setTimeout(() => setFocused(false), 180)}
@@ -98,8 +139,8 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           {focused && searchQuery.trim().length > 0 && (
             <div className="search-dropdown" role="listbox">
               {searchResults.length === 0 ? (
-                <div style={{ padding: '10px 12px', fontSize: '0.78rem', color: '#847b6e' }}>
-                  No matching fires, causes, policies, or AVAs found.
+                <div className="search-empty">
+                  No matching fires, OSM wineries, causes, or policies found.
                 </div>
               ) : (
                 searchResults.map((item, i) => (
@@ -110,9 +151,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                     onMouseDown={() => onSelectSearchResult(item)}
                   >
                     <div className="search-result-main">
-                      <div className="search-result-title">
-                        <span>{item.title}</span>
-                      </div>
+                      <div className="search-result-title">{item.title}</div>
                       <div className="search-result-meta">{item.subtitle}</div>
                     </div>
                     {item.acres !== undefined && (
@@ -134,65 +173,150 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             id="mode-btn-cumulative"
             className={`mode-pill ${viewMode === 'cumulative' ? 'active' : ''}`}
             onClick={() => onViewModeChange('cumulative')}
-            title="Show cumulative historical scars up to selected year, highlighting active year"
           >
             <Layers size={13} />
-            <span>Cumulative History</span>
+            <span>Cumulative</span>
           </button>
           <button
             type="button"
             id="mode-btn-single-year"
             className={`mode-pill ${viewMode === 'single_year' ? 'active' : ''}`}
             onClick={() => onViewModeChange('single_year')}
-            title="Isolate and watch only fires that occurred in the selected year"
           >
             <Eye size={13} />
-            <span>Single Year ("Watch Year")</span>
+            <span>Watch Year</span>
           </button>
           <button
             type="button"
             id="mode-btn-reburn"
             className={`mode-pill ${viewMode === 'reburn_matrix' ? 'active' : ''}`}
             onClick={() => onViewModeChange('reburn_matrix')}
-            title="Highlight overlapping multi-decade reburn corridors (e.g. 1964 Hanly vs 2017 Tubbs, 1981 vs 2017 Atlas)"
           >
             <Sparkles size={13} />
-            <span>Reburn Overlap</span>
+            <span>Reburn</span>
           </button>
         </div>
 
-        {/* Basemap & AVA Labels Toggle */}
+        {/* 3D Terrain, Wind & Orbit Quick Controls */}
         <div className="mode-pills">
           <button
             type="button"
-            className={`mode-pill ${basemap === 'dark_terrain' ? 'active' : ''}`}
-            onClick={() => onBasemapChange('dark_terrain')}
+            className={`mode-pill ${layers.terrain3D ? 'active' : ''}`}
+            onClick={() => onToggleLayer('terrain3D')}
+            title="Toggle 3D Elevation Terrain & Hillshading"
           >
-            <span>Dark Atlas</span>
+            <Mountain size={13} />
+            <span>3D</span>
           </button>
           <button
             type="button"
-            className={`mode-pill ${basemap === 'topo_relief' ? 'active' : ''}`}
-            onClick={() => onBasemapChange('topo_relief')}
+            className={`mode-pill ${isOrbiting3D ? 'active' : ''}`}
+            onClick={onToggleOrbit3D}
+            title="Cinematic 3D Camera Orbit around Napa Valley"
           >
-            <span>Topo Relief</span>
+            <Orbit size={13} />
+            <span>Orbit</span>
           </button>
           <button
             type="button"
-            className={`mode-pill ${basemap === 'satellite_hybrid' ? 'active' : ''}`}
-            onClick={() => onBasemapChange('satellite_hybrid')}
+            className={`mode-pill ${layers.windParticles ? 'active' : ''}`}
+            onClick={() => onToggleLayer('windParticles')}
+            title="Toggle Animated Historical Wind & Ember Flow Field"
           >
-            <span>Satellite</span>
+            <Wind size={13} />
+            <span>Wind</span>
           </button>
+        </div>
+
+        {/* Layers & OpenStreetMap Popover Button */}
+        <div className="layers-popover-anchor">
           <button
             type="button"
-            className={`mode-pill ${showLandmarks ? 'active' : ''}`}
-            onClick={onToggleLandmarks}
-            title="Toggle Napa Valley AVA & Mountain Peak Labels"
+            id="btn-layers-popover"
+            className={`layers-trigger-btn ${layersOpen ? 'active' : ''}`}
+            onClick={() => setLayersOpen((v) => !v)}
           >
-            <Compass size={13} />
-            <span>AVAs & Peaks</span>
+            <SlidersHorizontal size={13} />
+            <span>Map & OSM ({activeOsmCount})</span>
           </button>
+
+          {layersOpen && (
+            <div className="layers-popover glass-panel">
+              <div className="popover-section">
+                <div className="popover-heading">Basemap Style</div>
+                <div className="basemap-grid">
+                  {(
+                    [
+                      ['dark_terrain', 'Dark 3D'],
+                      ['osm_standard', 'OpenStreetMap'],
+                      ['topo_relief', 'USGS Topo'],
+                      ['satellite_hybrid', 'Satellite']
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`basemap-opt ${basemap === id ? 'active' : ''}`}
+                      onClick={() => onBasemapChange(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="popover-section">
+                <div className="popover-heading">OpenStreetMap Vector Layers</div>
+                <div className="layer-toggle-list">
+                  <button
+                    type="button"
+                    className={`layer-toggle-row ${layers.osmWineries ? 'on' : ''}`}
+                    onClick={() => onToggleLayer('osmWineries')}
+                  >
+                    <Wine size={13} color="#fb7185" />
+                    <span>OSM Napa Wineries</span>
+                    <span className="toggle-dot" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`layer-toggle-row ${layers.osmEmergency ? 'on' : ''}`}
+                    onClick={() => onToggleLayer('osmEmergency')}
+                  >
+                    <Building2 size={13} color="#38bdf8" />
+                    <span>OSM Fire Stations & Hospitals</span>
+                    <span className="toggle-dot" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`layer-toggle-row ${layers.osmPowerLines ? 'on' : ''}`}
+                    onClick={() => onToggleLayer('osmPowerLines')}
+                  >
+                    <Zap size={13} color="#facc15" />
+                    <span>OSM HV Power Transmission</span>
+                    <span className="toggle-dot" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`layer-toggle-row ${layers.osmCorridors ? 'on' : ''}`}
+                    onClick={() => onToggleLayer('osmCorridors')}
+                  >
+                    <Route size={13} color="#cbd5e1" />
+                    <span>OSM Evacuation Highways</span>
+                    <span className="toggle-dot" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`layer-toggle-row ${layers.landmarks ? 'on' : ''}`}
+                    onClick={() => onToggleLayer('landmarks')}
+                  >
+                    <Mountain size={13} color="#4ade80" />
+                    <span>AVA & Peak Labels</span>
+                    <span className="toggle-dot" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </header>
@@ -207,18 +331,19 @@ interface LeftExplorerDrawerProps {
   onSelectCauseFilter: (c: string) => void;
   selectedFire: FireFeature | null;
   activeDossier: LandmarkDossier | null;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
   onSelectLandmarkDossier: (d: LandmarkDossier) => void;
   onSelectFire: (f: FireFeature) => void;
 }
 
 const CAUSE_FILTERS = [
-  { label: 'All Causes', value: 'ALL' },
-  { label: '⚡ Utility / Power', value: 'Electrical Power / Utility' },
+  { label: 'All', value: 'ALL' },
+  { label: '⚡ Utility', value: 'Electrical Power / Utility' },
   { label: '🌩️ Lightning', value: 'Lightning' },
   { label: '🔥 Arson', value: 'Arson' },
-  { label: '🚜 Equipment / Debris', value: 'Equipment Use' },
-  { label: '🚗 Vehicle', value: 'Vehicle' },
-  { label: '❓ Undetermined', value: 'Unknown / Undetermined' }
+  { label: '🚜 Equip', value: 'Equipment Use' },
+  { label: '🚗 Vehicle', value: 'Vehicle' }
 ];
 
 export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
@@ -229,20 +354,19 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
   onSelectCauseFilter,
   selectedFire,
   activeDossier,
+  isCollapsed,
+  onToggleCollapse,
   onSelectLandmarkDossier,
   onSelectFire
 }) => {
   const [activeTab, setActiveTab] = useState<'landmarks' | 'year_fires' | 'policy_timeline'>('landmarks');
 
-  // Compute KPI metrics for current view
   const stats = useMemo(() => {
-    if (!firesData) return { count: 0, totalAcres: 0, yearCount: 0, yearAcres: 0 };
+    if (!firesData) return { totalAcres: 0, yearAcres: 0 };
     const allUpToYear = firesData.features.filter((f) => f.properties.year <= selectedYear);
     const inYear = firesData.features.filter((f) => f.properties.year === selectedYear);
     return {
-      count: allUpToYear.length,
       totalAcres: allUpToYear.reduce((acc, f) => acc + f.properties.acres, 0),
-      yearCount: inYear.length,
       yearAcres: inYear.reduce((acc, f) => acc + f.properties.acres, 0)
     };
   }, [firesData, selectedYear]);
@@ -269,17 +393,44 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
     return list.sort((a, b) => b.reform.yearEnacted - a.reform.yearEnacted);
   }, []);
 
+  if (isCollapsed) {
+    return (
+      <button
+        type="button"
+        className="collapsed-rail-pill left"
+        onClick={onToggleCollapse}
+        title="Expand Fire Explorer & Callouts"
+      >
+        <PanelLeftOpen size={15} color="#fb923c" />
+        <span>Explorer ({selectedYear})</span>
+      </button>
+    );
+  }
+
   return (
     <aside className="left-drawer" id="left-explorer-drawer">
-      {/* KPI Summary & Cause Filter Card */}
       <div className="glass-panel">
+        <div className="drawer-top-strip">
+          <span className="section-label">
+            <Filter size={12} /> Napa Fire Explorer
+          </span>
+          <button
+            type="button"
+            className="subtle-icon-btn"
+            onClick={onToggleCollapse}
+            title="Collapse Explorer to Maximize 3D Map"
+          >
+            <PanelLeftClose size={14} />
+          </button>
+        </div>
+
         <div className="kpi-strip">
           <div className="kpi-cell">
-            <span className="kpi-label">Selected Year</span>
+            <span className="kpi-label">Year</span>
             <span className="kpi-value ember">{selectedYear}</span>
           </div>
           <div className="kpi-cell">
-            <span className="kpi-label">{selectedYear} Burned</span>
+            <span className="kpi-label">Season</span>
             <span className="kpi-value">
               {stats.yearAcres >= 1000
                 ? `${(stats.yearAcres / 1000).toFixed(1)}k ac`
@@ -287,32 +438,12 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
             </span>
           </div>
           <div className="kpi-cell">
-            <span className="kpi-label">1964–{selectedYear} Total</span>
+            <span className="kpi-label">1964–{selectedYear}</span>
             <span className="kpi-value">{(stats.totalAcres / 1000).toFixed(0)}k ac</span>
           </div>
         </div>
 
         <div className="filter-section">
-          <div className="section-header-row">
-            <span className="section-label">
-              <Filter size={12} /> Filter Ignition Cause
-            </span>
-            {selectedCauseFilter !== 'ALL' && (
-              <button
-                type="button"
-                onClick={() => onSelectCauseFilter('ALL')}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#fb923c',
-                  fontSize: '0.7rem',
-                  cursor: 'pointer'
-                }}
-              >
-                Reset
-              </button>
-            )}
-          </div>
           <div className="cause-chips">
             {CAUSE_FILTERS.map((cf) => (
               <button
@@ -321,41 +452,37 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
                 className={`cause-chip ${selectedCauseFilter === cf.value ? 'active' : ''}`}
                 onClick={() => onSelectCauseFilter(cf.value)}
               >
-                <span>{cf.label}</span>
+                {cf.label}
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Tabbed Callouts & Catalog Card */}
       <div className="glass-panel landmarks-panel">
         <div className="panel-tabs">
           <button
             type="button"
-            id="tab-btn-landmarks"
             className={`panel-tab ${activeTab === 'landmarks' ? 'active' : ''}`}
             onClick={() => setActiveTab('landmarks')}
           >
             <Award size={12} style={{ display: 'inline', marginRight: 4, verticalAlign: -1 }} />
-            Landmark Callouts (7)
+            Landmarks
           </button>
           <button
             type="button"
-            id="tab-btn-catalog"
             className={`panel-tab ${activeTab === 'year_fires' ? 'active' : ''}`}
             onClick={() => setActiveTab('year_fires')}
           >
-            All Fires ({filteredFiresList.length})
+            Catalog ({filteredFiresList.length})
           </button>
           <button
             type="button"
-            id="tab-btn-policies"
             className={`panel-tab ${activeTab === 'policy_timeline' ? 'active' : ''}`}
             onClick={() => setActiveTab('policy_timeline')}
           >
             <Scale size={12} style={{ display: 'inline', marginRight: 4, verticalAlign: -1 }} />
-            Policy Legacy
+            Policies
           </button>
         </div>
 
@@ -367,32 +494,25 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
                 <button
                   key={d.id}
                   type="button"
-                  id={`landmark-card-${d.id}`}
                   className={`landmark-card ${isSelected ? 'selected' : ''}`}
                   onClick={() => onSelectLandmarkDossier(d)}
                 >
                   <div className="landmark-card-top">
                     <span className="landmark-year-badge">{d.year}</span>
                     <span className="landmark-acres">
-                      {d.acresBurned.toLocaleString('en-US', { maximumFractionDigits: 0 })} acres
+                      {d.acresBurned.toLocaleString('en-US', { maximumFractionDigits: 0 })} ac
                     </span>
                   </div>
                   <div className="landmark-title">{d.displayName}</div>
                   <div className="landmark-sub">{d.subtitle}</div>
-                  <div className="landmark-tags">
-                    <span className="micro-tag">Cause: {d.causeAnalysis.officialCause.split('(')[0].trim()}</span>
-                    <span className="micro-tag">{d.structuresDestroyed.toLocaleString()} structures</span>
-                    <span className="micro-tag">{d.publicPolicyLegacy.reforms.length} policy reforms</span>
-                  </div>
                 </button>
               );
             })}
 
           {activeTab === 'year_fires' &&
             (filteredFiresList.length === 0 ? (
-              <div style={{ padding: '18px 12px', textAlign: 'center', fontSize: '0.78rem', color: '#847b6e' }}>
-                No recorded perimeters match the current year/cause filter. Try switching to Cumulative History or
-                selecting a major fire year (e.g. 2020, 2017, 2018, 2015, 1981).
+              <div className="empty-list-msg">
+                No perimeters match this year/cause filter. Switch to Cumulative or pick a major year.
               </div>
             ) : (
               filteredFiresList.slice(0, 80).map((f) => {
@@ -411,12 +531,9 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
                         {p.acres.toLocaleString('en-US', { maximumFractionDigits: 1 })} ac
                       </span>
                     </div>
-                    <div className="landmark-title">
-                      {p.name} Fire {p.complexName ? `(${p.complexName})` : ''}
-                    </div>
+                    <div className="landmark-title">{p.name} Fire</div>
                     <div className="landmark-tags">
                       <span className="micro-tag">{p.cause}</span>
-                      <span className="micro-tag">{p.agencyCode}</span>
                       {p.alarmDate && <span className="micro-tag">{p.alarmDate}</span>}
                     </div>
                   </button>
@@ -433,21 +550,11 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
                 onClick={() => onSelectLandmarkDossier(dossier)}
               >
                 <div className="landmark-card-top">
-                  <span className="landmark-year-badge" style={{ background: 'rgba(74,222,128,0.18)', color: '#86efac' }}>
-                    Enacted {reform.yearEnacted}
-                  </span>
+                  <span className="landmark-year-badge policy">{reform.yearEnacted}</span>
                   <span className="micro-tag">{reform.jurisdiction}</span>
                 </div>
-                <div className="landmark-title" style={{ color: '#86efac' }}>
-                  {reform.code}
-                </div>
-                <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#f6f2eb' }}>{reform.title}</div>
-                <div className="landmark-sub">{reform.summary}</div>
-                <div className="landmark-tags">
-                  <span className="micro-tag" style={{ color: '#fdba74' }}>
-                    Triggered by: {dossier.displayName} ({dossier.year}) →
-                  </span>
-                </div>
+                <div className="landmark-title policy-text">{reform.code}</div>
+                <div className="landmark-sub">{reform.title}</div>
               </button>
             ))}
         </div>
@@ -460,7 +567,6 @@ interface BottomTimelineDockProps {
   firesData: FireGeoJSON | null;
   selectedYear: number;
   isPlayingYears: boolean;
-  playbackSpeedMs: number;
   onSelectYear: (yr: number) => void;
   onTogglePlayYears: () => void;
   onStepYear: (delta: number) => void;
@@ -469,14 +575,13 @@ interface BottomTimelineDockProps {
 }
 
 const EPOCH_PRESETS = [
-  { label: '1964 Hanly Siege', year: 1964 },
+  { label: '1964 Hanly', year: 1964 },
   { label: '1981 Atlas Peak', year: 1981 },
-  { label: '2004 Rumsey', year: 2004 },
-  { label: '2015 Drought Siege', year: 2015 },
-  { label: '2017 Wine Country Firestorm', year: 2017 },
-  { label: '2018 County Fire', year: 2018 },
-  { label: '2020 LNU & Glass Megafires', year: 2020 },
-  { label: '2025 Pickett Reburn', year: 2025 }
+  { label: '2015 Drought', year: 2015 },
+  { label: '2017 Firestorm', year: 2017 },
+  { label: '2018 County', year: 2018 },
+  { label: '2020 LNU & Glass', year: 2020 },
+  { label: '2025 Pickett', year: 2025 }
 ];
 
 export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
@@ -515,7 +620,6 @@ export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
   return (
     <footer className="bottom-timeline-dock" id="bottom-timeline-dock">
       <div className="timeline-controls-row">
-        {/* Playback Controls */}
         <div className="playback-cluster">
           <button
             type="button"
@@ -523,40 +627,21 @@ export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
             className="play-btn"
             onClick={onTogglePlayYears}
           >
-            {isPlayingYears ? <Pause size={14} /> : <Play size={14} />}
-            <span>{isPlayingYears ? 'Pause Timeline' : 'Play 60-Year History'}</span>
+            {isPlayingYears ? <Pause size={13} /> : <Play size={13} />}
+            <span>{isPlayingYears ? 'Pause' : 'Play 1964–2025'}</span>
           </button>
 
-          <button
-            type="button"
-            className="icon-btn"
-            title="Previous Year"
-            onClick={() => onStepYear(-1)}
-          >
-            <SkipBack size={14} />
+          <button type="button" className="icon-btn" title="Previous Year" onClick={() => onStepYear(-1)}>
+            <SkipBack size={13} />
           </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title="Next Year"
-            onClick={() => onStepYear(1)}
-          >
-            <SkipForward size={14} />
+          <button type="button" className="icon-btn" title="Next Year" onClick={() => onStepYear(1)}>
+            <SkipForward size={13} />
           </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title="Reset to Full 2025 View"
-            onClick={onResetTimeline}
-          >
-            <RotateCcw size={14} />
+          <button type="button" className="icon-btn" title="Reset to 2025" onClick={onResetTimeline}>
+            <RotateCcw size={13} />
           </button>
 
-          {/* Direct Year Selector & "Watch This Year" Trigger */}
           <div className="year-readout-box">
-            <label htmlFor="select-specific-year" style={{ fontSize: '0.7rem', color: '#847b6e' }}>
-              YEAR:
-            </label>
             <select
               id="select-specific-year"
               className="year-Jump-select"
@@ -568,31 +653,26 @@ export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
                 const ac = info?.acres || 0;
                 return (
                   <option key={y} value={y}>
-                    {y} {ac > 0 ? `(${Math.round(ac).toLocaleString()} ac)` : '(Quiet)'}
+                    {y} {ac > 0 ? `(${Math.round(ac).toLocaleString()} ac)` : ''}
                   </option>
                 );
               })}
             </select>
             <span className="year-stats-inline">
               {currentYearInfo.count} fires •{' '}
-              <strong style={{ color: '#fff7ed' }}>
-                {Math.round(currentYearInfo.acres).toLocaleString()} ac
-              </strong>
+              <strong>{Math.round(currentYearInfo.acres).toLocaleString()} ac</strong>
             </span>
             <button
               type="button"
               id="btn-watch-selected-year"
               className="epoch-btn active"
-              style={{ marginLeft: 4 }}
               onClick={() => onWatchSpecificYear(selectedYear)}
-              title="Isolate and animate the fires of this specific year"
             >
               Watch {selectedYear}
             </button>
           </div>
         </div>
 
-        {/* Landmark Fire Year Quick-Jump Presets */}
         <div className="epoch-presets">
           {EPOCH_PRESETS.map((ep) => (
             <button
@@ -607,42 +687,36 @@ export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
         </div>
       </div>
 
-      {/* 1964-2025 Interactive Annual Burned Acres Bar Scrubber */}
       <div className="histogram-container" role="slider" aria-valuenow={selectedYear} aria-valuemin={1964} aria-valuemax={2025}>
         {yearsRange.map((yr) => {
           const info = annualTotals.get(yr) || { acres: 0, count: 0 };
-          // Square-root scale so moderate fire years (5,000-40,000 ac) are clearly visible alongside 2020 (375,000 ac)
           const maxSqrt = Math.sqrt(376000);
-          const heightPct = info.acres > 0 ? Math.max(12, Math.min(100, (Math.sqrt(info.acres) / maxSqrt) * 100)) : 5;
+          const heightPct =
+            info.acres > 0 ? Math.max(12, Math.min(100, (Math.sqrt(info.acres) / maxSqrt) * 100)) : 5;
           const isSelected = yr === selectedYear;
           const isPast = yr < selectedYear;
 
-          let barColor = 'rgba(132, 123, 110, 0.28)';
-          if (isSelected) {
-            barColor = '#fb923c';
-          } else if (info.acres >= 50000) {
-            barColor = isPast ? '#ef4444' : 'rgba(239, 68, 68, 0.45)';
-          } else if (info.acres >= 5000) {
-            barColor = isPast ? '#f59e0b' : 'rgba(245, 158, 11, 0.4)';
-          } else if (info.acres > 0) {
-            barColor = isPast ? '#b45309' : 'rgba(180, 83, 9, 0.35)';
-          }
+          let barColor = 'rgba(132, 123, 110, 0.25)';
+          if (isSelected) barColor = '#fb923c';
+          else if (info.acres >= 50000) barColor = isPast ? '#ef4444' : 'rgba(239, 68, 68, 0.42)';
+          else if (info.acres >= 5000) barColor = isPast ? '#f59e0b' : 'rgba(245, 158, 11, 0.36)';
+          else if (info.acres > 0) barColor = isPast ? '#b45309' : 'rgba(180, 83, 9, 0.3)';
 
-          const showTick = yr === 1964 || yr % 5 === 0 || yr === 2017 || yr === 2025;
+          const showTick = yr === 1964 || yr % 10 === 0 || yr === 2017 || yr === 2025;
 
           return (
             <div
               key={yr}
               className={`hist-bar-col ${isSelected ? 'selected' : ''}`}
               onClick={() => onSelectYear(yr)}
-              title={`${yr}: ${info.count} fires, ${Math.round(info.acres).toLocaleString()} acres burned`}
+              title={`${yr}: ${info.count} fires, ${Math.round(info.acres).toLocaleString()} acres`}
             >
               <div
                 className="hist-bar"
                 style={{
                   height: `${heightPct}%`,
                   backgroundColor: barColor,
-                  boxShadow: isSelected ? '0 0 10px #f97316' : 'none'
+                  boxShadow: isSelected ? '0 0 8px #f97316' : 'none'
                 }}
               />
               <span className="hist-year-tick">{showTick ? yr : ''}</span>

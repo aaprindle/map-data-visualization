@@ -37,10 +37,58 @@ export interface FireGeoJSON {
   features: FireFeature[];
 }
 
-export type ViewMode =
-  | 'cumulative'     // Cumulative 60-year history up to selectedYear (with current year highlighted)
-  | 'single_year'    // Only fires in selectedYear ("Watch Year" mode)
-  | 'reburn_matrix'  // Overlapping burn frequency highlights across decades
-  | 'evolution';     // Day-by-day animated fire evolution for a selected Landmark Fire
+export interface OsmPoiProperties {
+  osmId: number;
+  osmType: string;
+  category: 'fire_station' | 'hospital' | 'winery';
+  name: string;
+  operator: string | null;
+  website: string | null;
+  address: string | null;
+  lat: number;
+  lon: number;
+}
 
-export type BasemapStyle = 'dark_terrain' | 'topo_relief' | 'satellite_hybrid';
+export interface OsmPoiFeature {
+  type: 'Feature';
+  properties: OsmPoiProperties;
+  geometry: {
+    type: 'Point';
+    coordinates: [number, number];
+  };
+}
+
+export interface OsmPoiGeoJSON {
+  type: 'FeatureCollection';
+  features: OsmPoiFeature[];
+}
+
+export interface OsmLineGeoJSON {
+  type: 'FeatureCollection';
+  features: Array<{
+    type: 'Feature';
+    properties: Record<string, any>;
+    geometry: {
+      type: 'LineString';
+      coordinates: [number, number][];
+    };
+  }>;
+}
+
+export interface LayerToggles {
+  terrain3D: boolean;
+  osmWineries: boolean;
+  osmEmergency: boolean;
+  osmPowerLines: boolean;
+  osmCorridors: boolean;
+  windParticles: boolean;
+  landmarks: boolean;
+}
+
+export type ViewMode =
+  | 'cumulative'
+  | 'single_year'
+  | 'reburn_matrix'
+  | 'evolution';
+
+export type BasemapStyle = 'dark_terrain' | 'osm_standard' | 'topo_relief' | 'satellite_hybrid';

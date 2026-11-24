@@ -1,8 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { BasemapStyle, FireFeature, FireGeoJSON, ViewMode } from './types/fire';
+import { Wind } from 'lucide-react';
+import type {
+  BasemapStyle,
+  FireFeature,
+  FireGeoJSON,
+  LayerToggles,
+  OsmLineGeoJSON,
+  OsmPoiGeoJSON,
+  ViewMode
+} from './types/fire';
 import { LANDMARK_DOSSIERS, NAPA_LANDMARKS, type LandmarkDossier } from './data/landmarkFires';
 import { findDossierForFire } from './utils/fireEnrichment';
 import { NapaFireMap } from './components/NapaFireMap';
+import { WindFieldCanvas } from './components/WindFieldCanvas';
 import { DossierPanel } from './components/DossierPanel';
 import {
   HeaderBar,
@@ -13,15 +23,32 @@ import {
 export function App() {
   const [firesData, setFiresData] = useState<FireGeoJSON | null>(null);
   const [countiesData, setCountiesData] = useState<any | null>(null);
+  const [osmPois, setOsmPois] = useState<OsmPoiGeoJSON | null>(null);
+  const [osmPower, setOsmPower] = useState<OsmLineGeoJSON | null>(null);
+  const [osmRoads, setOsmRoads] = useState<OsmLineGeoJSON | null>(null);
 
   const [selectedYear, setSelectedYear] = useState<number>(2020);
   const [viewMode, setViewMode] = useState<ViewMode>('cumulative');
   const [basemap, setBasemap] = useState<BasemapStyle>('dark_terrain');
-  const [showLandmarks, setShowLandmarks] = useState<boolean>(true);
   const [selectedCauseFilter, setSelectedCauseFilter] = useState<string>('ALL');
+
+  const [layers, setLayers] = useState<LayerToggles>({
+    terrain3D: true,
+    osmWineries: true,
+    osmEmergency: true,
+    osmPowerLines: true,
+    osmCorridors: true,
+    windParticles: true,
+    landmarks: true
+  });
+
+  const [isOrbiting3D, setIsOrbiting3D] = useState<boolean>(false);
+  const [leftCollapsed, setLeftCollapsed] = useState<boolean>(false);
+  const [rightCollapsed, setRightCollapsed] = useState<boolean>(false);
 
   const [selectedFire, setSelectedFire] = useState<FireFeature | null>(null);
   const [activeDossier, setActiveDossier] = useState<LandmarkDossier | null>(LANDMARK_DOSSIERS[0]);
+  const [flyToCoords, setFlyToCoords] = useState<{ lon: number; lat: number; zoom?: number; ts: number } | null>(null);
 
   const [evolutionStageIdx, setEvolutionStageIdx] = useState<number>(0);
   const [isWatchingEvolution, setIsWatchingEvolution] = useState<boolean>(false);
@@ -29,27 +56,35 @@ export function App() {
 
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Load GeoJSON datasets
+  // Load CAL FIRE FRAP & OpenStreetMap GeoJSON datasets
   useEffect(() => {
+    const safeJson = (url: string) =>
+      fetch(url)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+
     Promise.all([
-      fetch('/data/napa_fires.geojson').then((r) => r.json()),
-      fetch('/data/north_bay_counties.geojson').then((r) => r.json())
-    ])
-      .then(([fires, counties]) => {
+      safeJson('/data/napa_fires.geojson'),
+      safeJson('/data/north_bay_counties.geojson'),
+      safeJson('/data/napa_osm_pois.geojson'),
+      safeJson('/data/napa_osm_power.geojson'),
+      safeJson('/data/napa_osm_roads.geojson')
+    ]).then(([fires, counties, pois, power, roads]) => {
+      if (fires) {
         setFiresData(fires);
-        setCountiesData(counties);
-        // Select the 2020 Hennessey / LNU Complex feature initially to match default dossier
         const initial = fires.features.find(
           (f: FireFeature) => f.properties.year === 2020 && f.properties.rawName === 'HENNESSEY'
         );
-        if (initial) {
-          setSelectedFire(initial);
-        }
-      })
-      .catch((err) => console.error('Failed to load Napa wildfire datasets:', err));
+        if (initial) setSelectedFire(initial);
+      }
+      if (counties) setCountiesData(counties);
+      if (pois) setOsmPois(pois);
+      if (power) setOsmPower(power);
+      if (roads) setOsmRoads(roads);
+    });
   }, []);
 
-  // Multi-year 60-year timeline playback loop
+  // 60-year timeline playback loop
   useEffect(() => {
     if (!isPlayingYears) return;
     const timer = setInterval(() => {
@@ -60,7 +95,7 @@ export function App() {
         }
         return prev + 1;
       });
-    }, 650);
+    }, 620);
     return () => clearInterval(timer);
   }, [isPlayingYears]);
 
@@ -80,7 +115,10 @@ export function App() {
     return () => clearInterval(timer);
   }, [isWatchingEvolution, activeDossier]);
 
-  // Handle selecting an individual fire polygon on the map or list
+  const handleToggleLayer = (key: keyof LayerToggles) => {
+    setLayers((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const handleSelectFire = (fire: FireFeature) => {
     setSelectedFire(fire);
     setSelectedYear(fire.properties.year);
@@ -88,31 +126,28 @@ export function App() {
     setActiveDossier(matchedDossier || null);
     setEvolutionStageIdx(0);
     setIsWatchingEvolution(false);
+    setRightCollapsed(false);
   };
 
-  // Handle selecting one of the 7 curated Landmark Dossiers
   const handleSelectLandmarkDossier = (dossier: LandmarkDossier) => {
     setActiveDossier(dossier);
     setSelectedYear(dossier.year);
     setEvolutionStageIdx(0);
     setIsWatchingEvolution(false);
+    setRightCollapsed(false);
     if (firesData) {
       const matchedFeat = firesData.features.find(
         (f) => f.properties.year === dossier.year && f.properties.rawName.includes(dossier.matchRawName)
       );
-      if (matchedFeat) {
-        setSelectedFire(matchedFeat);
-      }
+      if (matchedFeat) setSelectedFire(matchedFeat);
     }
   };
 
-  // Handle "Watch Specific Year" action
   const handleWatchSpecificYear = (yr: number) => {
     setIsPlayingYears(false);
     setSelectedYear(yr);
     setViewMode('single_year');
 
-    // Automatically select the largest fire of that year & start its evolution if it has a dossier
     if (firesData) {
       const firesInYr = firesData.features
         .filter((f) => f.properties.year === yr)
@@ -123,49 +158,45 @@ export function App() {
         const d = findDossierForFire(biggest.properties);
         setActiveDossier(d || null);
         setEvolutionStageIdx(0);
-        if (d) {
-          setIsWatchingEvolution(true);
-        }
+        setRightCollapsed(false);
+        if (d) setIsWatchingEvolution(true);
       }
     }
   };
 
-  // Universal Search across Fires, Years, Causes, Policy Bills (SB 901, AB 38, etc.), and AVAs
+  // Universal Search across Fires, Policy Reforms, AVAs, AND OpenStreetMap Wineries & Fire Stations
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [];
 
     const results: Array<{
-      type: 'fire' | 'policy' | 'landmark';
+      type: 'fire' | 'policy' | 'landmark' | 'osm';
       title: string;
       subtitle: string;
       acres?: number;
       year?: number;
       fire?: FireFeature;
       dossier?: LandmarkDossier;
+      coords?: [number, number];
     }> = [];
 
-    // 1. Search Landmark Dossiers & Policy Reforms
     for (const d of LANDMARK_DOSSIERS) {
-      const matchDossier =
+      if (
         d.displayName.toLowerCase().includes(q) ||
-        d.subtitle.toLowerCase().includes(q) ||
         d.subregion.toLowerCase().includes(q) ||
         String(d.year).includes(q) ||
         d.causeAnalysis.officialCause.toLowerCase().includes(q) ||
-        d.avaImpacted.some((ava) => ava.toLowerCase().includes(q));
-
-      if (matchDossier) {
+        d.avaImpacted.some((ava) => ava.toLowerCase().includes(q))
+      ) {
         results.push({
           type: 'landmark',
           title: `★ ${d.displayName}`,
-          subtitle: `${d.year} Landmark Dossier • ${d.causeAnalysis.officialCause.split('(')[0]}`,
+          subtitle: `${d.year} Landmark • ${d.causeAnalysis.officialCause.split('(')[0]}`,
           acres: d.acresBurned,
           year: d.year,
           dossier: d
         });
       }
-
       for (const ref of d.publicPolicyLegacy.reforms) {
         if (
           ref.code.toLowerCase().includes(q) ||
@@ -183,55 +214,63 @@ export function App() {
       }
     }
 
-    // 2. Search All 259 CAL FIRE Perimeters
-    if (firesData) {
-      for (const f of firesData.features) {
-        const p = f.properties;
+    if (osmPois) {
+      for (const poi of osmPois.features) {
         if (
-          p.name.toLowerCase().includes(q) ||
-          (p.complexName && p.complexName.toLowerCase().includes(q)) ||
-          String(p.year) === q ||
-          p.cause.toLowerCase().includes(q) ||
-          (p.causeDetail && p.causeDetail.toLowerCase().includes(q))
+          results.length < 14 &&
+          (poi.properties.name.toLowerCase().includes(q) ||
+            (poi.properties.address && poi.properties.address.toLowerCase().includes(q)))
         ) {
-          // Avoid duplicating top landmark if already at top
-          if (results.length < 18) {
-            results.push({
-              type: 'fire',
-              title: `${p.name} Fire (${p.year})`,
-              subtitle: `Cause: ${p.cause} • ${p.agencyCode}`,
-              acres: p.acres,
-              year: p.year,
-              fire: f
-            });
-          }
-        }
-      }
-    }
-
-    // 3. Search Napa AVAs / Peaks
-    for (const lm of NAPA_LANDMARKS) {
-      if (lm.name.toLowerCase().includes(q) || (lm.note && lm.note.toLowerCase().includes(q))) {
-        const relatedDossier = LANDMARK_DOSSIERS.find(
-          (d) =>
-            d.subregion.toLowerCase().includes(lm.name.toLowerCase()) ||
-            d.avaImpacted.some((a) => a.toLowerCase().includes(lm.name.toLowerCase()))
-        );
-        if (relatedDossier) {
+          const icon =
+            poi.properties.category === 'fire_station'
+              ? '🚒'
+              : poi.properties.category === 'hospital'
+              ? '🏥'
+              : '🍷';
           results.push({
-            type: 'landmark',
-            title: `📍 ${lm.name} (${lm.note || lm.category})`,
-            subtitle: `View major wildfire impact: ${relatedDossier.displayName}`,
-            acres: relatedDossier.acresBurned,
-            year: relatedDossier.year,
-            dossier: relatedDossier
+            type: 'osm',
+            title: `${icon} ${poi.properties.name}`,
+            subtitle: `OpenStreetMap ${poi.properties.category.replace('_', ' ')} • ${poi.properties.address || 'Napa Valley'}`,
+            coords: poi.geometry.coordinates
           });
         }
       }
     }
 
+    if (firesData) {
+      for (const f of firesData.features) {
+        const p = f.properties;
+        if (
+          results.length < 18 &&
+          (p.name.toLowerCase().includes(q) ||
+            String(p.year) === q ||
+            p.cause.toLowerCase().includes(q))
+        ) {
+          results.push({
+            type: 'fire',
+            title: `${p.name} Fire (${p.year})`,
+            subtitle: `Cause: ${p.cause} • ${p.agencyCode}`,
+            acres: p.acres,
+            year: p.year,
+            fire: f
+          });
+        }
+      }
+    }
+
+    for (const lm of NAPA_LANDMARKS) {
+      if (results.length < 18 && lm.name.toLowerCase().includes(q)) {
+        results.push({
+          type: 'osm',
+          title: `📍 ${lm.name}`,
+          subtitle: lm.note || 'Napa Valley Landmark',
+          coords: lm.coords
+        });
+      }
+    }
+
     return results.slice(0, 14);
-  }, [searchQuery, firesData]);
+  }, [searchQuery, firesData, osmPois]);
 
   const handleSelectSearchResult = (item: any) => {
     setSearchQuery('');
@@ -239,27 +278,44 @@ export function App() {
       handleSelectLandmarkDossier(item.dossier);
     } else if (item.fire) {
       handleSelectFire(item.fire);
+    } else if (item.coords) {
+      setFlyToCoords({ lon: item.coords[0], lat: item.coords[1], zoom: 14.5, ts: Date.now() });
     }
   };
 
+  const activeWindBearing = activeDossier?.primarySpreadBearingDeg ?? 225;
+  const activeWindSpeed = activeDossier?.peakWindGustMph ?? 28;
+
   return (
     <div className="atlas-shell">
-      {/* Full-Viewport Interactive MapLibre GL Canvas */}
+      {/* 3D Terrain + OpenStreetMap + CAL FIRE Interactive Map */}
       <NapaFireMap
         firesData={firesData}
         countiesData={countiesData}
+        osmPois={osmPois}
+        osmPower={osmPower}
+        osmRoads={osmRoads}
         selectedYear={selectedYear}
         viewMode={viewMode}
         basemap={basemap}
+        layers={layers}
         selectedCauseFilter={selectedCauseFilter}
         selectedFire={selectedFire}
         activeDossier={activeDossier}
         evolutionStageIdx={evolutionStageIdx}
-        showLandmarks={showLandmarks}
+        isOrbiting3D={isOrbiting3D}
+        flyToCoords={flyToCoords}
         onSelectFire={handleSelectFire}
       />
 
-      {/* Top Command & Search Bar */}
+      {/* Animated Historical Diablo/North Wind & Ember Flow Field */}
+      <WindFieldCanvas
+        enabled={layers.windParticles}
+        bearingDeg={activeWindBearing}
+        windSpeedMph={activeWindSpeed}
+      />
+
+      {/* Top Command & Layer Header */}
       <HeaderBar
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -269,11 +325,24 @@ export function App() {
         onViewModeChange={setViewMode}
         basemap={basemap}
         onBasemapChange={setBasemap}
-        showLandmarks={showLandmarks}
-        onToggleLandmarks={() => setShowLandmarks((v) => !v)}
+        layers={layers}
+        onToggleLayer={handleToggleLayer}
+        isOrbiting3D={isOrbiting3D}
+        onToggleOrbit3D={() => setIsOrbiting3D((v) => !v)}
       />
 
-      {/* Left Explorer & Right Investigative Dossier Drawers */}
+      {/* Floating Wind Telemetry Pill */}
+      {layers.windParticles && activeDossier && (
+        <div className="wind-telemetry-pill" aria-label="Historical Wind Telemetry">
+          <Wind size={13} color="#fb923c" />
+          <span>
+            <strong>{activeDossier.peakWindGustMph} mph</strong> gusts ({activeDossier.primarySpreadBearingDeg}° vector) •{' '}
+            {activeDossier.minHumidityPct}% min RH
+          </span>
+        </div>
+      )}
+
+      {/* Main Collapsible Side Drawers */}
       <main className="workspace-overlay">
         <LeftExplorerDrawer
           firesData={firesData}
@@ -283,6 +352,8 @@ export function App() {
           onSelectCauseFilter={setSelectedCauseFilter}
           selectedFire={selectedFire}
           activeDossier={activeDossier}
+          isCollapsed={leftCollapsed}
+          onToggleCollapse={() => setLeftCollapsed((v) => !v)}
           onSelectLandmarkDossier={handleSelectLandmarkDossier}
           onSelectFire={handleSelectFire}
         />
@@ -290,58 +361,72 @@ export function App() {
         <DossierPanel
           selectedFire={selectedFire}
           activeDossier={activeDossier}
+          osmPois={osmPois}
+          osmPower={osmPower}
+          osmRoads={osmRoads}
           evolutionStageIdx={evolutionStageIdx}
           isWatchingEvolution={isWatchingEvolution}
+          isCollapsed={rightCollapsed}
+          onToggleCollapse={() => setRightCollapsed((v) => !v)}
           onSelectStage={(idx) => {
             setIsWatchingEvolution(false);
             setEvolutionStageIdx(idx);
           }}
           onToggleWatchEvolution={() => {
-            if (!isWatchingEvolution && activeDossier && evolutionStageIdx >= activeDossier.progressionStages.length - 1) {
+            if (
+              !isWatchingEvolution &&
+              activeDossier &&
+              evolutionStageIdx >= activeDossier.progressionStages.length - 1
+            ) {
               setEvolutionStageIdx(0);
             }
             setIsWatchingEvolution((v) => !v);
           }}
+          onFlyToPoint={(lon, lat, zoom) => setFlyToCoords({ lon, lat, zoom, ts: Date.now() })}
         />
       </main>
 
-      {/* Floating Cartographic Legend */}
+      {/* Compact Floating Legend */}
       <div className="map-legend-floating" aria-label="Map Legend">
         <div className="legend-item">
           <span className="legend-swatch" style={{ background: '#ef4444', border: '1px solid #fff7ed' }} />
-          <span>Selected Year ({selectedYear})</span>
+          <span>{selectedYear} Active</span>
         </div>
         <div className="legend-item">
           <span className="legend-swatch" style={{ background: 'rgba(217, 119, 6, 0.45)', border: '1px solid #fb923c' }} />
-          <span>Prior Burn Scars (1964–{selectedYear - 1})</span>
+          <span>Prior Scars</span>
         </div>
-        <div className="legend-item">
-          <span
-            className="legend-swatch"
-            style={{ background: 'rgba(249, 115, 22, 0.35)', border: '1px dashed #fef08a' }}
-          />
-          <span>Day-by-Day Spread Front</span>
-        </div>
-        <div className="legend-item">
-          <span className="legend-swatch" style={{ background: 'transparent', border: '2px dashed #fbbf24' }} />
-          <span>Napa County Boundary</span>
-        </div>
+        {layers.osmWineries && (
+          <div className="legend-item">
+            <span className="legend-dot" style={{ background: '#e11d48' }} />
+            <span>OSM Wineries</span>
+          </div>
+        )}
+        {layers.osmEmergency && (
+          <div className="legend-item">
+            <span className="legend-dot" style={{ background: '#38bdf8' }} />
+            <span>OSM Fire/Hosp</span>
+          </div>
+        )}
+        {layers.osmPowerLines && (
+          <div className="legend-item">
+            <span className="legend-line" style={{ borderColor: '#facc15' }} />
+            <span>HV Power</span>
+          </div>
+        )}
       </div>
 
-      {/* Bottom 60-Year Histogram Scrubber & Playback Controls */}
+      {/* Bottom 60-Year Histogram Scrubber */}
       <BottomTimelineDock
         firesData={firesData}
         selectedYear={selectedYear}
         isPlayingYears={isPlayingYears}
-        playbackSpeedMs={650}
         onSelectYear={(yr) => {
           setIsPlayingYears(false);
           setSelectedYear(yr);
         }}
         onTogglePlayYears={() => {
-          if (!isPlayingYears && selectedYear >= 2025) {
-            setSelectedYear(1964);
-          }
+          if (!isPlayingYears && selectedYear >= 2025) setSelectedYear(1964);
           setIsPlayingYears((v) => !v);
         }}
         onStepYear={(delta) => {
