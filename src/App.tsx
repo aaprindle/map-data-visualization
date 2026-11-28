@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Wind } from 'lucide-react';
+import { Flame, Wind } from 'lucide-react';
 import type {
   BasemapStyle,
   FireFeature,
@@ -13,7 +13,7 @@ import { LANDMARK_DOSSIERS, NAPA_LANDMARKS, type LandmarkDossier } from './data/
 import { findDossierForFire } from './utils/fireEnrichment';
 import { NapaFireMap } from './components/NapaFireMap';
 import { WindFieldCanvas } from './components/WindFieldCanvas';
-import { DossierPanel } from './components/DossierPanel';
+import { DossierPanel, type DossierTab } from './components/DossierPanel';
 import {
   HeaderBar,
   LeftExplorerDrawer,
@@ -48,11 +48,15 @@ export function App() {
 
   const [selectedFire, setSelectedFire] = useState<FireFeature | null>(null);
   const [activeDossier, setActiveDossier] = useState<LandmarkDossier | null>(LANDMARK_DOSSIERS[0]);
+  const [requestedDossierTab, setRequestedDossierTab] = useState<{ tab: DossierTab; ts: number } | null>(null);
+  const [focusFireTs, setFocusFireTs] = useState<number>(0);
+  const [cameraOverviewTs, setCameraOverviewTs] = useState<number>(0);
   const [flyToCoords, setFlyToCoords] = useState<{ lon: number; lat: number; zoom?: number; ts: number } | null>(null);
 
   const [evolutionStageIdx, setEvolutionStageIdx] = useState<number>(0);
   const [isWatchingEvolution, setIsWatchingEvolution] = useState<boolean>(false);
   const [isPlayingYears, setIsPlayingYears] = useState<boolean>(false);
+  const [isPausedMidTimeline, setIsPausedMidTimeline] = useState<boolean>(false);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -92,11 +96,12 @@ export function App() {
       setSelectedYear((prev) => {
         if (prev >= 2025) {
           setIsPlayingYears(false);
+          setIsPausedMidTimeline(false);
           return 2025;
         }
         return prev + 1;
       });
-    }, 620);
+    }, 480);
     return () => clearInterval(timer);
   }, [isPlayingYears]);
 
@@ -116,11 +121,26 @@ export function App() {
     return () => clearInterval(timer);
   }, [isWatchingEvolution, activeDossier]);
 
+  const currentYearSummary = useMemo(() => {
+    if (!firesData) return { count: 0, acres: 0 };
+    const matches = firesData.features.filter(
+      (f) =>
+        f.properties.year === selectedYear &&
+        (selectedCauseFilter === 'ALL' || f.properties.cause === selectedCauseFilter)
+    );
+    return {
+      count: matches.length,
+      acres: matches.reduce((sum, f) => sum + f.properties.acres, 0)
+    };
+  }, [firesData, selectedYear, selectedCauseFilter]);
+
   const handleToggleLayer = (key: keyof LayerToggles) => {
     setLayers((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const handleSelectFire = (fire: FireFeature) => {
+    setIsPlayingYears(false);
+    setIsPausedMidTimeline(false);
     setSelectedFire(fire);
     setSelectedYear(fire.properties.year);
     const matchedDossier = findDossierForFire(fire.properties);
@@ -128,24 +148,47 @@ export function App() {
     setEvolutionStageIdx(0);
     setIsWatchingEvolution(false);
     setRightCollapsed(false);
+    setFocusFireTs(Date.now());
   };
 
-  const handleSelectLandmarkDossier = (dossier: LandmarkDossier) => {
+  const selectDossierWithTab = (dossier: LandmarkDossier, tab: DossierTab) => {
+    setIsPlayingYears(false);
+    setIsPausedMidTimeline(false);
     setActiveDossier(dossier);
     setSelectedYear(dossier.year);
     setEvolutionStageIdx(0);
     setIsWatchingEvolution(false);
     setRightCollapsed(false);
+    setRequestedDossierTab({ tab, ts: Date.now() });
     if (firesData) {
       const matchedFeat = firesData.features.find(
         (f) => f.properties.year === dossier.year && f.properties.rawName.includes(dossier.matchRawName)
       );
-      if (matchedFeat) setSelectedFire(matchedFeat);
+      if (matchedFeat) {
+        setSelectedFire(matchedFeat);
+        setFocusFireTs(Date.now());
+      } else {
+        setFlyToCoords({
+          lon: dossier.ignitionOriginCoords[0],
+          lat: dossier.ignitionOriginCoords[1],
+          zoom: 12.2,
+          ts: Date.now()
+        });
+      }
     }
+  };
+
+  const handleSelectLandmarkDossier = (dossier: LandmarkDossier) => {
+    selectDossierWithTab(dossier, 'evolution');
+  };
+
+  const handleSelectPolicyDossier = (dossier: LandmarkDossier) => {
+    selectDossierWithTab(dossier, 'policy');
   };
 
   const handleWatchSpecificYear = (yr: number) => {
     setIsPlayingYears(false);
+    setIsPausedMidTimeline(false);
     setSelectedYear(yr);
     setViewMode('single_year');
 
@@ -160,9 +203,36 @@ export function App() {
         setActiveDossier(d || null);
         setEvolutionStageIdx(0);
         setRightCollapsed(false);
-        if (d) setIsWatchingEvolution(true);
+        setRequestedDossierTab({ tab: 'evolution', ts: Date.now() });
+        setFocusFireTs(Date.now());
+        setIsWatchingEvolution(Boolean(d));
+      } else {
+        setSelectedFire(null);
+        setActiveDossier(null);
+        setIsWatchingEvolution(false);
+        setCameraOverviewTs(Date.now());
       }
     }
+  };
+
+  const handleTogglePlayYears = () => {
+    if (isPlayingYears) {
+      setIsPlayingYears(false);
+      setIsPausedMidTimeline(selectedYear < 2025);
+      return;
+    }
+
+    setIsWatchingEvolution(false);
+    setSelectedFire(null);
+    setActiveDossier(null);
+    setCameraOverviewTs(Date.now());
+
+    // Start cleanly from 1964 unless resuming a paused playback run
+    if (!isPausedMidTimeline || selectedYear >= 2025) {
+      setSelectedYear(1964);
+    }
+    setIsPausedMidTimeline(false);
+    setIsPlayingYears(true);
   };
 
   // Universal Search across Fires, Policy Reforms, AVAs, AND OpenStreetMap Wineries & Fire Stations
@@ -275,7 +345,9 @@ export function App() {
 
   const handleSelectSearchResult = (item: any) => {
     setSearchQuery('');
-    if (item.dossier) {
+    if (item.type === 'policy' && item.dossier) {
+      handleSelectPolicyDossier(item.dossier);
+    } else if (item.dossier) {
       handleSelectLandmarkDossier(item.dossier);
     } else if (item.fire) {
       handleSelectFire(item.fire);
@@ -288,7 +360,11 @@ export function App() {
   const activeWindSpeed = activeDossier?.peakWindGustMph ?? 28;
 
   return (
-    <div className="atlas-shell">
+    <div
+      className="atlas-shell"
+      data-left-collapsed={leftCollapsed ? 'true' : 'false'}
+      data-right-collapsed={rightCollapsed ? 'true' : 'false'}
+    >
       {/* 3D Terrain + OpenStreetMap + CAL FIRE Interactive Map */}
       <NapaFireMap
         firesData={firesData}
@@ -302,9 +378,14 @@ export function App() {
         layers={layers}
         selectedCauseFilter={selectedCauseFilter}
         selectedFire={selectedFire}
+        focusFireTs={focusFireTs}
+        cameraOverviewTs={cameraOverviewTs}
         activeDossier={activeDossier}
         evolutionStageIdx={evolutionStageIdx}
         isOrbiting3D={isOrbiting3D}
+        onStopOrbit3D={() => setIsOrbiting3D(false)}
+        leftCollapsed={leftCollapsed}
+        rightCollapsed={rightCollapsed}
         flyToCoords={flyToCoords}
         onSelectFire={handleSelectFire}
       />
@@ -332,15 +413,27 @@ export function App() {
         onToggleOrbit3D={() => setIsOrbiting3D((v) => !v)}
       />
 
-      {/* Floating Wind Telemetry Pill */}
-      {layers.windParticles && activeDossier && (
-        <div className="wind-telemetry-pill" aria-label="Historical Wind Telemetry">
-          <Wind size={13} color="#fb923c" />
+      {/* Floating Telemetry / Live Playback Pill */}
+      {isPlayingYears ? (
+        <div className="wind-telemetry-pill playback-live" aria-live="polite">
+          <Flame size={13} color="#fb923c" />
           <span>
-            <strong>{activeDossier.peakWindGustMph} mph</strong> gusts ({activeDossier.primarySpreadBearingDeg}° vector) •{' '}
-            {activeDossier.minHumidityPct}% min RH
+            PLAYING <strong>{selectedYear}</strong> • {currentYearSummary.count}{' '}
+            {currentYearSummary.count === 1 ? 'fire' : 'fires'} •{' '}
+            <strong>{Math.round(currentYearSummary.acres).toLocaleString()} ac</strong>
           </span>
         </div>
+      ) : (
+        layers.windParticles &&
+        activeDossier && (
+          <div className="wind-telemetry-pill" aria-label="Historical Wind Telemetry">
+            <Wind size={13} color="#fb923c" />
+            <span>
+              <strong>{activeDossier.peakWindGustMph} mph</strong> gusts ({activeDossier.primarySpreadBearingDeg}° vector) •{' '}
+              {activeDossier.minHumidityPct}% min RH
+            </span>
+          </div>
+        )
       )}
 
       {/* Main Collapsible Side Drawers */}
@@ -356,6 +449,7 @@ export function App() {
           isCollapsed={leftCollapsed}
           onToggleCollapse={() => setLeftCollapsed((v) => !v)}
           onSelectLandmarkDossier={handleSelectLandmarkDossier}
+          onSelectPolicyDossier={handleSelectPolicyDossier}
           onSelectFire={handleSelectFire}
         />
 
@@ -368,6 +462,7 @@ export function App() {
           evolutionStageIdx={evolutionStageIdx}
           isWatchingEvolution={isWatchingEvolution}
           isCollapsed={rightCollapsed}
+          requestedTab={requestedDossierTab}
           onToggleCollapse={() => setRightCollapsed((v) => !v)}
           onSelectStage={(idx) => {
             setIsWatchingEvolution(false);
@@ -395,7 +490,7 @@ export function App() {
         </div>
         <div className="legend-item">
           <span className="legend-swatch" style={{ background: 'rgba(217, 119, 6, 0.45)', border: '1px solid #fb923c' }} />
-          <span>Prior Scars</span>
+          <span>{viewMode === 'reburn_matrix' ? 'Overlap Scars' : 'Prior Scars'}</span>
         </div>
         {layers.osmWineries && (
           <div className="legend-item">
@@ -422,22 +517,28 @@ export function App() {
         firesData={firesData}
         selectedYear={selectedYear}
         isPlayingYears={isPlayingYears}
+        isPausedMidTimeline={isPausedMidTimeline}
         onSelectYear={(yr) => {
           setIsPlayingYears(false);
+          setIsPausedMidTimeline(false);
           setSelectedYear(yr);
         }}
-        onTogglePlayYears={() => {
-          if (!isPlayingYears && selectedYear >= 2025) setSelectedYear(1964);
-          setIsPlayingYears((v) => !v);
-        }}
+        onTogglePlayYears={handleTogglePlayYears}
         onStepYear={(delta) => {
           setIsPlayingYears(false);
+          setIsPausedMidTimeline(false);
           setSelectedYear((prev) => Math.max(1964, Math.min(2025, prev + delta)));
         }}
         onResetTimeline={() => {
           setIsPlayingYears(false);
+          setIsPausedMidTimeline(false);
+          setIsWatchingEvolution(false);
           setSelectedYear(2025);
           setViewMode('cumulative');
+          setSelectedCauseFilter('ALL');
+          setSelectedFire(null);
+          setActiveDossier(null);
+          setCameraOverviewTs(Date.now());
         }}
         onWatchSpecificYear={handleWatchSpecificYear}
       />

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Flame,
   ShieldAlert,
@@ -29,6 +29,8 @@ import {
   getOsmUrl
 } from '../utils/spatialAnalytics';
 
+export type DossierTab = 'evolution' | 'cause_response' | 'policy' | 'osm_impact';
+
 interface DossierPanelProps {
   selectedFire: FireFeature | null;
   activeDossier: LandmarkDossier | null;
@@ -38,13 +40,12 @@ interface DossierPanelProps {
   evolutionStageIdx: number;
   isWatchingEvolution: boolean;
   isCollapsed: boolean;
+  requestedTab?: { tab: DossierTab; ts: number } | null;
   onToggleCollapse: () => void;
   onSelectStage: (idx: number) => void;
   onToggleWatchEvolution: () => void;
   onFlyToPoint: (lon: number, lat: number, zoom?: number) => void;
 }
-
-type DossierTab = 'evolution' | 'cause_response' | 'policy' | 'osm_impact';
 
 export const DossierPanel: React.FC<DossierPanelProps> = ({
   selectedFire,
@@ -55,12 +56,19 @@ export const DossierPanel: React.FC<DossierPanelProps> = ({
   evolutionStageIdx,
   isWatchingEvolution,
   isCollapsed,
+  requestedTab,
   onToggleCollapse,
   onSelectStage,
   onToggleWatchEvolution,
   onFlyToPoint
 }) => {
   const [tab, setTab] = useState<DossierTab>('evolution');
+
+  useEffect(() => {
+    if (requestedTab) {
+      setTab(requestedTab.tab);
+    }
+  }, [requestedTab]);
 
   const spatialImpact = useMemo(
     () =>

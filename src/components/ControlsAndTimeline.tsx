@@ -75,16 +75,30 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   const [focused, setFocused] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         inputRef.current?.focus();
+      } else if (e.key === 'Escape') {
+        setLayersOpen(false);
+        setFocused(false);
+        inputRef.current?.blur();
+      }
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setLayersOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onMouseDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onMouseDown);
+    };
   }, []);
 
   const activeOsmCount = [
@@ -229,7 +243,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
         </div>
 
         {/* Layers & OpenStreetMap Popover Button */}
-        <div className="layers-popover-anchor">
+        <div className="layers-popover-anchor" ref={popoverRef}>
           <button
             type="button"
             id="btn-layers-popover"
@@ -334,6 +348,7 @@ interface LeftExplorerDrawerProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onSelectLandmarkDossier: (d: LandmarkDossier) => void;
+  onSelectPolicyDossier: (d: LandmarkDossier) => void;
   onSelectFire: (f: FireFeature) => void;
 }
 
@@ -357,19 +372,24 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
   isCollapsed,
   onToggleCollapse,
   onSelectLandmarkDossier,
+  onSelectPolicyDossier,
   onSelectFire
 }) => {
   const [activeTab, setActiveTab] = useState<'landmarks' | 'year_fires' | 'policy_timeline'>('landmarks');
 
   const stats = useMemo(() => {
     if (!firesData) return { totalAcres: 0, yearAcres: 0 };
-    const allUpToYear = firesData.features.filter((f) => f.properties.year <= selectedYear);
-    const inYear = firesData.features.filter((f) => f.properties.year === selectedYear);
+    const causeFiltered =
+      selectedCauseFilter === 'ALL'
+        ? firesData.features
+        : firesData.features.filter((f) => f.properties.cause === selectedCauseFilter);
+    const allUpToYear = causeFiltered.filter((f) => f.properties.year <= selectedYear);
+    const inYear = causeFiltered.filter((f) => f.properties.year === selectedYear);
     return {
       totalAcres: allUpToYear.reduce((acc, f) => acc + f.properties.acres, 0),
       yearAcres: inYear.reduce((acc, f) => acc + f.properties.acres, 0)
     };
-  }, [firesData, selectedYear]);
+  }, [firesData, selectedYear, selectedCauseFilter]);
 
   const filteredFiresList = useMemo(() => {
     if (!firesData) return [];
@@ -547,7 +567,7 @@ export const LeftExplorerDrawer: React.FC<LeftExplorerDrawerProps> = ({
                 key={reform.code}
                 type="button"
                 className="landmark-card"
-                onClick={() => onSelectLandmarkDossier(dossier)}
+                onClick={() => onSelectPolicyDossier(dossier)}
               >
                 <div className="landmark-card-top">
                   <span className="landmark-year-badge policy">{reform.yearEnacted}</span>
@@ -567,6 +587,7 @@ interface BottomTimelineDockProps {
   firesData: FireGeoJSON | null;
   selectedYear: number;
   isPlayingYears: boolean;
+  isPausedMidTimeline: boolean;
   onSelectYear: (yr: number) => void;
   onTogglePlayYears: () => void;
   onStepYear: (delta: number) => void;
@@ -588,6 +609,7 @@ export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
   firesData,
   selectedYear,
   isPlayingYears,
+  isPausedMidTimeline,
   onSelectYear,
   onTogglePlayYears,
   onStepYear,
@@ -624,11 +646,13 @@ export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
           <button
             type="button"
             id="btn-play-60yr-timeline"
-            className="play-btn"
+            className={`play-btn ${isPlayingYears ? 'playing' : ''}`}
             onClick={onTogglePlayYears}
           >
             {isPlayingYears ? <Pause size={13} /> : <Play size={13} />}
-            <span>{isPlayingYears ? 'Pause' : 'Play 1964–2025'}</span>
+            <span>
+              {isPlayingYears ? 'Pause' : isPausedMidTimeline ? `Resume (${selectedYear})` : 'Play 1964–2025'}
+            </span>
           </button>
 
           <button type="button" className="icon-btn" title="Previous Year" onClick={() => onStepYear(-1)}>
@@ -637,7 +661,7 @@ export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
           <button type="button" className="icon-btn" title="Next Year" onClick={() => onStepYear(1)}>
             <SkipForward size={13} />
           </button>
-          <button type="button" className="icon-btn" title="Reset to 2025" onClick={onResetTimeline}>
+          <button type="button" className="icon-btn" title="Reset Overview (2025)" onClick={onResetTimeline}>
             <RotateCcw size={13} />
           </button>
 
@@ -659,13 +683,19 @@ export const BottomTimelineDock: React.FC<BottomTimelineDockProps> = ({
               })}
             </select>
             <span className="year-stats-inline">
-              {currentYearInfo.count} fires •{' '}
+              {currentYearInfo.count} {currentYearInfo.count === 1 ? 'fire' : 'fires'} •{' '}
               <strong>{Math.round(currentYearInfo.acres).toLocaleString()} ac</strong>
             </span>
             <button
               type="button"
               id="btn-watch-selected-year"
               className="epoch-btn active"
+              disabled={currentYearInfo.count === 0}
+              title={
+                currentYearInfo.count === 0
+                  ? `No CAL FIRE perimeters recorded in ${selectedYear}`
+                  : `Isolate and inspect ${selectedYear} wildfires`
+              }
               onClick={() => onWatchSpecificYear(selectedYear)}
             >
               Watch {selectedYear}

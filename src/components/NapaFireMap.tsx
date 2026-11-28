@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import type {
   BasemapStyle,
   FireFeature,
@@ -11,6 +11,9 @@ import type {
   ViewMode
 } from '../types/fire';
 import { NAPA_LANDMARKS, type LandmarkDossier } from '../data/landmarkFires';
+
+// Point MapLibre GL JS v6 explicitly at Vite-bundled worker asset so GeoJSON & DEM workers load cleanly
+maplibregl.setWorkerUrl(new URL(maplibreWorkerUrl, window.location.href).href);
 
 interface NapaFireMapProps {
   firesData: FireGeoJSON | null;
@@ -24,37 +27,64 @@ interface NapaFireMapProps {
   layers: LayerToggles;
   selectedCauseFilter: string;
   selectedFire: FireFeature | null;
+  focusFireTs: number;
+  cameraOverviewTs: number;
   activeDossier: LandmarkDossier | null;
   evolutionStageIdx: number;
   isOrbiting3D: boolean;
+  onStopOrbit3D: () => void;
+  leftCollapsed: boolean;
+  rightCollapsed: boolean;
   flyToCoords: { lon: number; lat: number; zoom?: number; ts: number } | null;
   onSelectFire: (fire: FireFeature) => void;
 }
 
-const BASEMAP_TILES: Record<BasemapStyle, { tiles: string[]; attribution: string }> = {
+const BASEMAP_TILES: Record<BasemapStyle, { tiles: string[]; attribution: string; maxzoom: number }> = {
   dark_terrain: {
     tiles: [
       'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
     ],
-    attribution: '© Esri, OpenStreetMap, CAL FIRE FRAP, AWS Open Terrain'
+    attribution: '© Esri, OpenStreetMap, CAL FIRE FRAP, AWS Open Terrain',
+    maxzoom: 16
   },
   osm_standard: {
     tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-    attribution: '© OpenStreetMap contributors, CAL FIRE FRAP'
+    attribution: '© OpenStreetMap contributors, CAL FIRE FRAP',
+    maxzoom: 18
   },
   topo_relief: {
     tiles: [
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'
     ],
-    attribution: '© Esri, USGS, OpenStreetMap, CAL FIRE FRAP'
+    attribution: '© Esri, USGS, OpenStreetMap, CAL FIRE FRAP',
+    maxzoom: 17
   },
   satellite_hybrid: {
     tiles: [
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
     ],
-    attribution: '© Esri, Maxar, Earthstar Geographics, CAL FIRE FRAP'
+    attribution: '© Esri, Maxar, Earthstar Geographics, CAL FIRE FRAP',
+    maxzoom: 17
   }
 };
+
+const OVERVIEW_CENTER: [number, number] = [-122.34, 38.52];
+const OVERVIEW_ZOOM = 9.5;
+const OVERVIEW_PITCH_3D = 40;
+const OVERVIEW_BEARING_3D = -10;
+
+const DECADE_FILL_EXPR: any = [
+  'match',
+  ['get', 'decade'],
+  '1960s', '#78350f',
+  '1970s', '#92400e',
+  '1980s', '#b45309',
+  '1990s', '#d97706',
+  '2000s', '#ea580c',
+  '2010s', '#dc2626',
+  '2020s', '#ef4444',
+  '#c2410c'
+];
 
 function createCirclePolygon(center: [number, number], radiusKm: number, points = 56) {
   const coords: [number, number][] = [];
@@ -88,9 +118,14 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
   layers,
   selectedCauseFilter,
   selectedFire,
+  focusFireTs,
+  cameraOverviewTs,
   activeDossier,
   evolutionStageIdx,
   isOrbiting3D,
+  onStopOrbit3D,
+  leftCollapsed,
+  rightCollapsed,
   flyToCoords,
   onSelectFire
 }) => {
@@ -98,24 +133,64 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
-  const firesDataRef = useRef<FireGeoJSON | null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
-  firesDataRef.current = firesData;
+  // Keep latest values in refs so map.on('load') and event listeners never read stale closures
+  const firesDataRef = useRef(firesData);
+  const countiesDataRef = useRef(countiesData);
+  const osmPoisRef = useRef(osmPois);
+  const osmPowerRef = useRef(osmPower);
+  const osmRoadsRef = useRef(osmRoads);
+  const layersRef = useRef(layers);
+  const basemapRef = useRef(basemap);
+  const selectedYearRef = useRef(selectedYear);
+  const onSelectFireRef = useRef(onSelectFire);
+  const onStopOrbit3DRef = useRef(onStopOrbit3D);
+  const leftCollapsedRef = useRef(leftCollapsed);
+  const rightCollapsedRef = useRef(rightCollapsed);
 
-  // Initialize MapLibre GL JS with 3D Terrain & OSM Vector Layers
+  const selectedFireRef = useRef(selectedFire);
+  const flyToRef = useRef(flyToCoords);
+
+  useEffect(() => {
+    firesDataRef.current = firesData;
+    countiesDataRef.current = countiesData;
+    osmPoisRef.current = osmPois;
+    osmPowerRef.current = osmPower;
+    osmRoadsRef.current = osmRoads;
+    layersRef.current = layers;
+    basemapRef.current = basemap;
+    selectedYearRef.current = selectedYear;
+    onSelectFireRef.current = onSelectFire;
+    onStopOrbit3DRef.current = onStopOrbit3D;
+    leftCollapsedRef.current = leftCollapsed;
+    rightCollapsedRef.current = rightCollapsed;
+    selectedFireRef.current = selectedFire;
+    flyToRef.current = flyToCoords;
+  });
+
+  // Initialize MapLibre GL JS with 3D Terrain, Atmospheric Sky, & OSM/CAL FIRE Vector Layers
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
-    const tileCfg = BASEMAP_TILES[basemap];
+    const tileCfg = BASEMAP_TILES[basemapRef.current];
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
+      attributionControl: false,
       style: {
         version: 8,
+        glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+        sky: {
+          'sky-color': '#0b0a09',
+          'horizon-color': '#1f1a16',
+          'sky-horizon-blend': 0.55
+        },
         sources: {
           basemap: {
             type: 'raster',
             tiles: tileCfg.tiles,
             tileSize: 256,
+            maxzoom: tileCfg.maxzoom,
             attribution: tileCfg.attribution
           },
           'terrain-dem': {
@@ -148,17 +223,18 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
           }
         ]
       },
-      center: [-122.37, 38.51],
-      zoom: 9.8,
-      pitch: 46,
-      bearing: -12,
-      maxPitch: 78,
+      center: OVERVIEW_CENTER,
+      zoom: OVERVIEW_ZOOM,
+      pitch: OVERVIEW_PITCH_3D,
+      bearing: OVERVIEW_BEARING_3D,
+      maxPitch: 72,
       maxZoom: 17,
       minZoom: 7.5
     });
 
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
-    map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: 'imperial' }), 'bottom-right');
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 100, unit: 'imperial' }), 'bottom-right');
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
     popupRef.current = new maplibregl.Popup({
       closeButton: false,
@@ -166,10 +242,18 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
       offset: 14
     });
 
-    map.on('load', () => {
-      // Enable 3D Terrain by default
+    map.on('dragstart', () => {
+      onStopOrbit3DRef.current();
+    });
+
+    map.once('style.load', () => {
+      const initLayers = layersRef.current;
+
+      // Enable 3D Terrain if toggled on
       try {
-        map.setTerrain({ source: 'terrain-dem', exaggeration: 1.65 });
+        if (initLayers.terrain3D) {
+          map.setTerrain({ source: 'terrain-dem', exaggeration: 1.55 });
+        }
       } catch {
         // Fallback safely if WebGL terrain unsupported
       }
@@ -177,7 +261,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
       // 1. Counties
       map.addSource('counties', {
         type: 'geojson',
-        data: countiesData || { type: 'FeatureCollection', features: [] }
+        data: countiesDataRef.current || { type: 'FeatureCollection', features: [] }
       });
 
       map.addLayer({
@@ -186,7 +270,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         source: 'counties',
         filter: ['==', ['get', 'isNapa'], false],
         paint: {
-          'line-color': 'rgba(255, 244, 229, 0.12)',
+          'line-color': 'rgba(255, 244, 229, 0.14)',
           'line-width': 1,
           'line-dasharray': [3, 3]
         }
@@ -198,7 +282,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         source: 'counties',
         filter: ['==', ['get', 'isNapa'], true],
         paint: {
-          'line-color': 'rgba(251, 191, 36, 0.25)',
+          'line-color': 'rgba(251, 191, 36, 0.28)',
           'line-width': 6,
           'line-blur': 3
         }
@@ -219,7 +303,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
       // 2. OSM Evacuation Corridors (Highways)
       map.addSource('osm-roads', {
         type: 'geojson',
-        data: osmRoads || { type: 'FeatureCollection', features: [] }
+        data: osmRoadsRef.current || { type: 'FeatureCollection', features: [] }
       });
 
       map.addLayer({
@@ -229,10 +313,10 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
-          visibility: layers.osmCorridors ? 'visible' : 'none'
+          visibility: initLayers.osmCorridors ? 'visible' : 'none'
         },
         paint: {
-          'line-color': 'rgba(226, 232, 240, 0.34)',
+          'line-color': 'rgba(226, 232, 240, 0.36)',
           'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1, 13, 2.8]
         }
       });
@@ -247,20 +331,10 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         id: 'fires-historical-fill',
         type: 'fill',
         source: 'fires',
+        filter: ['<', ['get', 'year'], selectedYearRef.current],
         paint: {
-          'fill-color': [
-            'match',
-            ['get', 'decade'],
-            '1960s', '#78350f',
-            '1970s', '#92400e',
-            '1980s', '#b45309',
-            '1990s', '#d97706',
-            '2000s', '#ea580c',
-            '2010s', '#dc2626',
-            '2020s', '#ef4444',
-            '#c2410c'
-          ],
-          'fill-opacity': 0.22
+          'fill-color': DECADE_FILL_EXPR,
+          'fill-opacity': 0.28
         }
       });
 
@@ -268,8 +342,9 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         id: 'fires-historical-outline',
         type: 'line',
         source: 'fires',
+        filter: ['<', ['get', 'year'], selectedYearRef.current],
         paint: {
-          'line-color': 'rgba(251, 146, 60, 0.35)',
+          'line-color': 'rgba(251, 146, 60, 0.4)',
           'line-width': 0.9
         }
       });
@@ -278,7 +353,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         id: 'fires-active-year-fill',
         type: 'fill',
         source: 'fires',
-        filter: ['==', ['get', 'year'], selectedYear],
+        filter: ['==', ['get', 'year'], selectedYearRef.current],
         paint: {
           'fill-color': [
             'match',
@@ -288,7 +363,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
             'large', '#f59e0b',
             '#fbbf24'
           ],
-          'fill-opacity': 0.55
+          'fill-opacity': 0.6
         }
       });
 
@@ -296,12 +371,12 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         id: 'fires-active-year-glow',
         type: 'line',
         source: 'fires',
-        filter: ['==', ['get', 'year'], selectedYear],
+        filter: ['==', ['get', 'year'], selectedYearRef.current],
         paint: {
           'line-color': '#fb923c',
           'line-width': 5.5,
           'line-blur': 3.5,
-          'line-opacity': 0.8
+          'line-opacity': 0.85
         }
       });
 
@@ -309,7 +384,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         id: 'fires-active-year-outline',
         type: 'line',
         source: 'fires',
-        filter: ['==', ['get', 'year'], selectedYear],
+        filter: ['==', ['get', 'year'], selectedYearRef.current],
         paint: {
           'line-color': '#fff7ed',
           'line-width': 1.7
@@ -357,7 +432,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
       // 5. OSM High-Voltage Power Transmission Lines
       map.addSource('osm-power', {
         type: 'geojson',
-        data: osmPower || { type: 'FeatureCollection', features: [] }
+        data: osmPowerRef.current || { type: 'FeatureCollection', features: [] }
       });
 
       map.addLayer({
@@ -365,7 +440,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         type: 'line',
         source: 'osm-power',
         layout: {
-          visibility: layers.osmPowerLines ? 'visible' : 'none'
+          visibility: initLayers.osmPowerLines ? 'visible' : 'none'
         },
         paint: {
           'line-color': '#facc15',
@@ -378,7 +453,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
       // 6. OSM Points of Interest (Wineries, Fire Stations, Hospitals)
       map.addSource('osm-pois', {
         type: 'geojson',
-        data: osmPois || { type: 'FeatureCollection', features: [] }
+        data: osmPoisRef.current || { type: 'FeatureCollection', features: [] }
       });
 
       map.addLayer({
@@ -387,14 +462,14 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         source: 'osm-pois',
         filter: ['==', ['get', 'category'], 'winery'],
         layout: {
-          visibility: layers.osmWineries ? 'visible' : 'none'
+          visibility: initLayers.osmWineries ? 'visible' : 'none'
         },
         paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 2.8, 13, 5.5],
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 13, 5.5],
           'circle-color': '#e11d48',
           'circle-stroke-color': '#ffe4e6',
           'circle-stroke-width': 1,
-          'circle-opacity': 0.88
+          'circle-opacity': 0.9
         }
       });
 
@@ -404,7 +479,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         source: 'osm-pois',
         filter: ['in', ['get', 'category'], ['literal', ['fire_station', 'hospital']]],
         layout: {
-          visibility: layers.osmEmergency ? 'visible' : 'none'
+          visibility: initLayers.osmEmergency ? 'visible' : 'none'
         },
         paint: {
           'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 4.5, 13, 7.5],
@@ -446,6 +521,9 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         id: 'napa-landmarks-circle',
         type: 'circle',
         source: 'napa-landmarks',
+        layout: {
+          visibility: initLayers.landmarks ? 'visible' : 'none'
+        },
         paint: {
           'circle-radius': ['match', ['get', 'category'], 'town', 4, 'peak', 3.5, 3],
           'circle-color': [
@@ -467,8 +545,9 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         type: 'symbol',
         source: 'napa-landmarks',
         layout: {
+          visibility: initLayers.landmarks ? 'visible' : 'none',
           'text-field': ['get', 'label'],
-          'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+          'text-font': ['Open Sans Semibold'],
           'text-size': 11,
           'text-offset': [0, 1.05],
           'text-anchor': 'top',
@@ -489,11 +568,12 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
         }
       });
 
-      // Unified Interactive Hover (OSM POIs take priority over Fire Perimeters)
+      // Unified Interactive Hover (OSM POIs > Napa Landmarks > Fire Perimeters)
       map.on('mousemove', (e) => {
-        const poiHits = map.queryRenderedFeatures(e.point, {
-          layers: ['osm-emergency-circle', 'osm-wineries-circle'].filter((id) => map.getLayer(id))
-        });
+        const poiLayers = ['osm-emergency-circle', 'osm-wineries-circle'].filter((id) =>
+          Boolean(map.getLayer(id))
+        );
+        const poiHits = poiLayers.length ? map.queryRenderedFeatures(e.point, { layers: poiLayers }) : [];
 
         if (poiHits.length > 0) {
           map.getCanvas().style.cursor = 'pointer';
@@ -504,8 +584,7 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
               : p.category === 'hospital'
               ? '🏥 OSM HOSPITAL'
               : '🍷 OSM NAPA WINERY';
-          const badgeColor =
-            p.category === 'winery' ? '#fb7185' : '#38bdf8';
+          const badgeColor = p.category === 'winery' ? '#fb7185' : '#38bdf8';
 
           popupRef.current
             ?.setLngLat(e.lngLat)
@@ -524,58 +603,86 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
           return;
         }
 
-        const fireHits = map.queryRenderedFeatures(e.point, {
-          layers: ['fires-active-year-fill', 'fires-historical-fill']
-        });
+        const fireLayers = ['fires-active-year-fill', 'fires-historical-fill'].filter((id) =>
+          Boolean(map.getLayer(id))
+        );
+        const fireHits = fireLayers.length ? map.queryRenderedFeatures(e.point, { layers: fireLayers }) : [];
 
-        if (!fireHits.length) {
-          map.getCanvas().style.cursor = '';
-          popupRef.current?.remove();
+        if (fireHits.length > 0) {
+          map.getCanvas().style.cursor = 'pointer';
+          const p = fireHits[0].properties as any;
+          const acresFmt = Number(p.acres || 0).toLocaleString('en-US', { maximumFractionDigits: 0 });
+          popupRef.current
+            ?.setLngLat(e.lngLat)
+            .setHTML(
+              `<div style="display:flex;flex-direction:column;gap:3px;min-width:185px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                  <span style="font-family:var(--font-mono);font-size:11px;font-weight:700;color:#fb923c;">${p.year}</span>
+                  <span style="font-family:var(--font-mono);font-size:11px;color:#fcd34d;">${acresFmt} acres</span>
+                </div>
+                <div style="font-size:13px;font-weight:600;color:#fff7ed;">${p.name} Fire</div>
+                <div style="font-size:11px;color:#bfb6a8;">Cause: ${p.cause}</div>
+                <div style="font-size:10px;color:#86efac;margin-top:2px;">Click for dossier & OSM spatial impact →</div>
+              </div>`
+            )
+            .addTo(map);
           return;
         }
 
-        map.getCanvas().style.cursor = 'pointer';
-        const p = fireHits[0].properties as any;
-        const acresFmt = Number(p.acres || 0).toLocaleString('en-US', { maximumFractionDigits: 0 });
-        popupRef.current
-          ?.setLngLat(e.lngLat)
-          .setHTML(
-            `<div style="display:flex;flex-direction:column;gap:3px;min-width:180px;">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-                <span style="font-family:var(--font-mono);font-size:11px;font-weight:700;color:#fb923c;">${p.year}</span>
-                <span style="font-family:var(--font-mono);font-size:11px;color:#fcd34d;">${acresFmt} acres</span>
-              </div>
-              <div style="font-size:13px;font-weight:600;color:#fff7ed;">${p.name} Fire</div>
-              <div style="font-size:11px;color:#bfb6a8;">Cause: ${p.cause}</div>
-              <div style="font-size:10px;color:#86efac;margin-top:2px;">Click for dossier & OSM spatial impact →</div>
-            </div>`
-          )
-          .addTo(map);
+        const lmLayers = ['napa-landmarks-circle'].filter((id) => Boolean(map.getLayer(id)));
+        const lmHits = lmLayers.length ? map.queryRenderedFeatures(e.point, { layers: lmLayers }) : [];
+        if (lmHits.length > 0) {
+          map.getCanvas().style.cursor = 'pointer';
+          const p = lmHits[0].properties as any;
+          popupRef.current
+            ?.setLngLat(e.lngLat)
+            .setHTML(
+              `<div style="display:flex;flex-direction:column;gap:2px;min-width:160px;">
+                <span style="font-family:var(--font-mono);font-size:10px;font-weight:700;color:#4ade80;text-transform:uppercase;">${p.category}</span>
+                <div style="font-size:13px;font-weight:600;color:#fff7ed;">${p.label}</div>
+                ${p.note ? `<div style="font-size:11px;color:#bfb6a8;">${p.note}</div>` : ''}
+              </div>`
+            )
+            .addTo(map);
+          return;
+        }
+
+        map.getCanvas().style.cursor = '';
+        popupRef.current?.remove();
+      });
+
+      map.getCanvas().addEventListener('mouseleave', () => {
+        popupRef.current?.remove();
       });
 
       map.on('click', (e) => {
-        const fireHits = map.queryRenderedFeatures(e.point, {
-          layers: ['fires-active-year-fill', 'fires-historical-fill']
-        });
-        if (!fireHits.length || !firesDataRef.current) return;
+        const fireLayers = ['fires-active-year-fill', 'fires-historical-fill'].filter((id) =>
+          Boolean(map.getLayer(id))
+        );
+        if (!fireLayers.length || !firesDataRef.current) return;
+        const fireHits = map.queryRenderedFeatures(e.point, { layers: fireLayers });
+        if (!fireHits.length) return;
         const clickedId = fireHits[0].properties?.id;
         const matched = firesDataRef.current.features.find((f) => f.properties.id === clickedId);
-        if (matched) onSelectFire(matched);
+        if (matched) onSelectFireRef.current(matched);
       });
+
+      setMapReady(true);
     });
 
     mapRef.current = map;
 
     return () => {
+      setMapReady(false);
       map.remove();
       mapRef.current = null;
     };
   }, []);
 
-  // Sync GeoJSON sources when async data arrives
+  // Sync GeoJSON sources whenever async data arrives OR map becomes ready
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !mapReady) return;
     const setData = (id: string, data: any) => {
       if (!data) return;
       const src = map.getSource(id) as maplibregl.GeoJSONSource | undefined;
@@ -586,39 +693,44 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
     setData('osm-pois', osmPois);
     setData('osm-power', osmPower);
     setData('osm-roads', osmRoads);
-  }, [firesData, countiesData, osmPois, osmPower, osmRoads]);
+  }, [mapReady, firesData, countiesData, osmPois, osmPower, osmRoads]);
 
-  // Update Basemap tiles
+  // Update Basemap tiles & attribution reliably
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !mapReady) return;
+    const cfg = BASEMAP_TILES[basemap];
     const src = map.getSource('basemap') as maplibregl.RasterTileSource | undefined;
-    if (src && typeof (src as any).setTiles === 'function') {
-      (src as any).setTiles(BASEMAP_TILES[basemap].tiles);
+    if (src) {
+      (src as any).attribution = cfg.attribution;
+      (src as any).maxzoom = cfg.maxzoom;
+      if (typeof src.setTiles === 'function') {
+        src.setTiles(cfg.tiles);
+      }
     }
     if (map.getLayer('terrain-hillshade')) {
       map.setPaintProperty(
         'terrain-hillshade',
         'hillshade-exaggeration',
-        basemap === 'dark_terrain' ? 0.55 : basemap === 'satellite_hybrid' ? 0.25 : 0.35
+        basemap === 'dark_terrain' ? 0.52 : basemap === 'satellite_hybrid' ? 0.22 : 0.34
       );
     }
-  }, [basemap]);
+  }, [mapReady, basemap]);
 
   // Update 3D Terrain & Vector Layer Visibilities
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !mapReady) return;
 
     try {
       if (layers.terrain3D) {
-        map.setTerrain({ source: 'terrain-dem', exaggeration: 1.65 });
+        map.setTerrain({ source: 'terrain-dem', exaggeration: 1.55 });
         if (map.getPitch() < 20) {
-          map.easeTo({ pitch: 50, duration: 750 });
+          map.easeTo({ pitch: OVERVIEW_PITCH_3D, duration: 700 });
         }
       } else {
         map.setTerrain(null);
-        map.easeTo({ pitch: 0, bearing: 0, duration: 650 });
+        map.easeTo({ pitch: 0, bearing: 0, duration: 600 });
       }
     } catch {
       // ignore if terrain not ready
@@ -636,11 +748,11 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
     setVis('napa-landmarks-circle', layers.landmarks);
     setVis('napa-landmarks-label', layers.landmarks);
     setVis('terrain-hillshade', layers.terrain3D);
-  }, [layers]);
+  }, [mapReady, layers]);
 
   // 3D Cinematic Orbit Animation Loop
   useEffect(() => {
-    if (!isOrbiting3D) return;
+    if (!isOrbiting3D || !mapReady) return;
     const map = mapRef.current;
     if (!map) return;
 
@@ -651,12 +763,13 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
     };
     animId = requestAnimationFrame(rotate);
     return () => cancelAnimationFrame(animId);
-  }, [isOrbiting3D]);
+  }, [mapReady, isOrbiting3D]);
 
-  // Update Wildfire Filters
+  // Update Wildfire Filters & Mode Styling (never blocked by tile fetches)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !mapReady) return;
+    if (!map.getLayer('fires-historical-fill') || !map.getLayer('fires-active-year-fill')) return;
 
     const causeCondition: any =
       selectedCauseFilter === 'ALL'
@@ -669,22 +782,29 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
       map.setFilter('fires-active-year-fill', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
       map.setFilter('fires-active-year-glow', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
       map.setFilter('fires-active-year-outline', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
-      map.setPaintProperty('fires-active-year-fill', 'fill-opacity', 0.62);
+      map.setPaintProperty('fires-active-year-fill', 'fill-opacity', 0.66);
     } else if (viewMode === 'reburn_matrix') {
+      // Reburn Matrix: all historical scars up to selectedYear rendered in vivid overlapping orange-red
+      // so areas burned 2x/3x/4x stack visually brighter
       map.setFilter('fires-historical-fill', ['all', ['<=', ['get', 'year'], selectedYear], causeCondition]);
       map.setFilter('fires-historical-outline', ['all', ['<=', ['get', 'year'], selectedYear], causeCondition]);
-      map.setPaintProperty('fires-historical-fill', 'fill-opacity', 0.34);
+      map.setPaintProperty('fires-historical-fill', 'fill-color', '#f97316');
+      map.setPaintProperty('fires-historical-fill', 'fill-opacity', 0.28);
+      map.setPaintProperty('fires-historical-outline', 'line-color', 'rgba(254, 240, 138, 0.55)');
       map.setFilter('fires-active-year-fill', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
       map.setFilter('fires-active-year-glow', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
       map.setFilter('fires-active-year-outline', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
+      map.setPaintProperty('fires-active-year-fill', 'fill-opacity', 0.5);
     } else {
       map.setFilter('fires-historical-fill', ['all', ['<', ['get', 'year'], selectedYear], causeCondition]);
       map.setFilter('fires-historical-outline', ['all', ['<', ['get', 'year'], selectedYear], causeCondition]);
-      map.setPaintProperty('fires-historical-fill', 'fill-opacity', 0.22);
+      map.setPaintProperty('fires-historical-fill', 'fill-color', DECADE_FILL_EXPR);
+      map.setPaintProperty('fires-historical-fill', 'fill-opacity', 0.28);
+      map.setPaintProperty('fires-historical-outline', 'line-color', 'rgba(251, 146, 60, 0.4)');
       map.setFilter('fires-active-year-fill', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
       map.setFilter('fires-active-year-glow', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
       map.setFilter('fires-active-year-outline', ['all', ['==', ['get', 'year'], selectedYear], causeCondition]);
-      map.setPaintProperty('fires-active-year-fill', 'fill-opacity', 0.56);
+      map.setPaintProperty('fires-active-year-fill', 'fill-opacity', 0.6);
     }
 
     if (selectedFire) {
@@ -692,12 +812,12 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
     } else {
       map.setFilter('fires-selected-highlight', ['==', ['get', 'id'], 'NONE']);
     }
-  }, [viewMode, selectedYear, selectedCauseFilter, selectedFire]);
+  }, [mapReady, viewMode, selectedYear, selectedCauseFilter, selectedFire]);
 
   // Ignition Marker & Evolution Wavefront
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !mapReady) return;
 
     if (originMarkerRef.current) {
       originMarkerRef.current.remove();
@@ -729,38 +849,68 @@ export const NapaFireMap: React.FC<NapaFireMapProps> = ({
     } else if (waveSrc) {
       waveSrc.setData({ type: 'FeatureCollection', features: [] });
     }
-  }, [activeDossier, evolutionStageIdx]);
+  }, [mapReady, activeDossier, evolutionStageIdx]);
 
-  // Fly to selected fire
+  // Fly to explicitly selected fire (with viewport-safe dynamic padding)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !selectedFire) return;
-    const [minX, minY, maxX, maxY] = selectedFire.properties.bbox;
+    const fire = selectedFireRef.current;
+    if (!map || !mapReady || !fire || focusFireTs === 0) return;
+
+    const [minX, minY, maxX, maxY] = fire.properties.bbox;
+    const container = map.getContainer();
+    const w = container.clientWidth || 1200;
+    const h = container.clientHeight || 800;
+
+    const rawLeft = leftCollapsedRef.current ? 48 : 330;
+    const rawRight = rightCollapsedRef.current ? 48 : 434;
+    const safeLeft = Math.min(rawLeft, Math.floor(w * 0.34));
+    const safeRight = Math.min(rawRight, Math.floor(w * 0.38));
+
     map.fitBounds(
       [
         [minX, minY],
         [maxX, maxY]
       ],
       {
-        padding: { top: 85, bottom: 135, left: 330, right: 430 },
+        padding: {
+          top: Math.min(100, Math.floor(h * 0.14)),
+          bottom: Math.min(148, Math.floor(h * 0.2)),
+          left: safeLeft,
+          right: safeRight
+        },
         maxZoom: 12.6,
-        pitch: layers.terrain3D ? 52 : 0,
-        duration: 1150
+        pitch: layersRef.current.terrain3D ? 48 : 0,
+        duration: 1050
       }
     );
-  }, [selectedFire?.properties.id]);
+  }, [mapReady, focusFireTs]);
 
-  // Fly to specific OSM POI or Street View point when clicked inside Dossier
+  // Smoothly return to full Napa Valley overview (e.g. when starting 60-year Play or Reset)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !flyToCoords) return;
-    map.flyTo({
-      center: [flyToCoords.lon, flyToCoords.lat],
-      zoom: flyToCoords.zoom || 14.2,
-      pitch: layers.terrain3D ? 58 : 0,
-      duration: 1100
+    if (!map || !mapReady || cameraOverviewTs === 0) return;
+    map.easeTo({
+      center: OVERVIEW_CENTER,
+      zoom: OVERVIEW_ZOOM,
+      pitch: layersRef.current.terrain3D ? OVERVIEW_PITCH_3D : 0,
+      bearing: layersRef.current.terrain3D ? OVERVIEW_BEARING_3D : 0,
+      duration: 950
     });
-  }, [flyToCoords?.ts]);
+  }, [mapReady, cameraOverviewTs]);
+
+  // Fly to specific OSM POI or Street View point when clicked inside Dossier or Search
+  useEffect(() => {
+    const map = mapRef.current;
+    const target = flyToRef.current;
+    if (!map || !mapReady || !target) return;
+    map.flyTo({
+      center: [target.lon, target.lat],
+      zoom: target.zoom || 14.2,
+      pitch: layersRef.current.terrain3D ? 55 : 0,
+      duration: 1050
+    });
+  }, [mapReady, flyToCoords?.ts]);
 
   return <div ref={mapContainerRef} className="map-viewport" id="napa-wildfire-map" />;
 };

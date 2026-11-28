@@ -69,12 +69,70 @@ body,
   overflow: hidden;
 }
 
-.map-viewport {
-  position: absolute;
+.map-viewport,
+.atlas-shell .map-viewport.maplibregl-map {
+  position: absolute !important;
   inset: 0;
   width: 100%;
   height: 100%;
   z-index: 1;
+}
+
+/* Keep MapLibre zoom/compass/scale/attribution clear of bottom dock and right dossier drawer */
+.atlas-shell .maplibregl-ctrl-bottom-right {
+  bottom: 122px;
+  right: 436px;
+  z-index: 14;
+  transition: right 0.2s ease;
+}
+
+.atlas-shell[data-right-collapsed='true'] .maplibregl-ctrl-bottom-right {
+  right: 16px;
+}
+
+.atlas-shell .maplibregl-ctrl-group {
+  background: var(--bg-surface) !important;
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 9px !important;
+  box-shadow: var(--shadow-panel) !important;
+  overflow: hidden;
+}
+
+.atlas-shell .maplibregl-ctrl-group button {
+  background: transparent !important;
+  border-color: var(--border-subtle) !important;
+}
+
+.atlas-shell .maplibregl-ctrl-group button:hover {
+  background: rgba(249, 115, 22, 0.18) !important;
+}
+
+.atlas-shell .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(0.92) sepia(0.08);
+}
+
+.atlas-shell .maplibregl-ctrl-scale {
+  background: var(--bg-surface) !important;
+  color: var(--text-secondary) !important;
+  border-color: var(--border-strong) !important;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+.atlas-shell .maplibregl-ctrl-attrib.maplibregl-compact {
+  background: var(--bg-surface) !important;
+  color: var(--text-secondary) !important;
+  border: 1px solid var(--border-subtle);
+}
+
+.atlas-shell .maplibregl-ctrl-attrib a {
+  color: #fdba74 !important;
+}
+
+.atlas-shell .maplibregl-ctrl-attrib-button {
+  filter: invert(0.9);
 }
 
 .wind-field-overlay {
@@ -469,6 +527,13 @@ body,
 
 .wind-telemetry-pill strong {
   color: #fdba74;
+}
+
+.wind-telemetry-pill.playback-live {
+  background: rgba(28, 16, 10, 0.92);
+  border-color: rgba(249, 115, 22, 0.72);
+  color: #fff7ed;
+  box-shadow: 0 0 22px rgba(249, 115, 22, 0.28), 0 6px 20px rgba(0, 0, 0, 0.55);
 }
 
 /* Main Workspace Overlay */
@@ -1265,20 +1330,25 @@ body,
 /* Compact Floating Legend */
 .map-legend-floating {
   position: absolute;
-  bottom: 112px;
-  left: 50%;
+  bottom: 122px;
+  left: calc(50% - 48px);
   transform: translateX(-50%);
   z-index: 16;
   background: var(--bg-surface);
   backdrop-filter: blur(14px);
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  padding: 6px 14px;
+  padding: 5px 13px;
   display: flex;
   align-items: center;
-  gap: 13px;
+  gap: 11px;
   box-shadow: var(--shadow-panel);
   pointer-events: auto;
+  transition: left 0.2s ease;
+}
+
+.atlas-shell[data-right-collapsed='true'] .map-legend-floating {
+  left: 50%;
 }
 
 .legend-item {
@@ -1351,6 +1421,17 @@ body,
   font-size: 0.74rem;
   font-weight: 600;
   cursor: pointer;
+  transition: box-shadow 0.15s ease, transform 0.12s ease;
+}
+
+.play-btn:hover {
+  box-shadow: 0 0 14px rgba(249, 115, 22, 0.45);
+}
+
+.play-btn.playing {
+  background: linear-gradient(180deg, #ef4444 0%, #b91c1c 100%);
+  border-color: rgba(252, 165, 165, 0.65);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
 }
 
 .icon-btn {
@@ -1427,7 +1508,7 @@ body,
   transition: all 0.14s ease;
 }
 
-.epoch-btn:hover {
+.epoch-btn:hover:not(:disabled) {
   border-color: var(--ember-orange);
   color: #fff7ed;
 }
@@ -1438,13 +1519,18 @@ body,
   color: #fca5a5;
 }
 
+.epoch-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
 .histogram-container {
   position: relative;
-  height: 44px;
+  height: 46px;
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  padding-top: 8px;
+  padding-top: 4px;
   user-select: none;
 }
 
@@ -1467,9 +1553,12 @@ body,
 
 .hist-year-tick {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: 0.58rem;
+  line-height: 12px;
+  height: 12px;
   color: var(--text-muted);
   margin-top: 2px;
+  white-space: nowrap;
 }
 
 .hist-bar-col.selected .hist-year-tick {
@@ -1517,14 +1606,19 @@ body,
   100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0), 0 0 16px #ef4444; }
 }
 
+@media (max-width: 1320px) {
+  .map-legend-floating { display: none; }
+}
+
 @media (max-width: 1180px) {
   .left-drawer { width: 270px; }
   .right-dossier-drawer { width: 350px; }
-  .map-legend-floating { display: none; }
+  .atlas-shell .maplibregl-ctrl-bottom-right { right: 374px; }
 }
 
 @media (max-width: 860px) {
   .workspace-overlay { flex-direction: column; overflow-y: auto; }
   .left-drawer, .right-dossier-drawer { width: 100%; max-height: 44vh; }
   .wind-telemetry-pill { display: none; }
+  .atlas-shell .maplibregl-ctrl-bottom-right { right: 14px; }
 }
