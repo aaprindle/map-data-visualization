@@ -34,10 +34,9 @@ interface NapaFireMapProps {
 const BASEMAP_TILES: Record<BasemapStyle, { tiles: string[]; attribution: string }> = {
   dark_terrain: {
     tiles: [
-      'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-      'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
     ],
-    attribution: '© OpenStreetMap, © CARTO, CAL FIRE FRAP, AWS Open Terrain'
+    attribution: '© Esri, OpenStreetMap, CAL FIRE FRAP, AWS Open Terrain'
   },
   osm_standard: {
     tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
